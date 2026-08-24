@@ -351,7 +351,7 @@ export default function SolicitudesPage() {
       { id: "paz-salvo", label: "Paz y Salvo" },
       { id: "copia-contrato", label: "Copia de Contrato" },
       { id: "declaracion-renta", label: "Declaración de renta" },
-      { id: "retencion-fuente", label: "Certificado de Retención en la fuente" },
+      { id: "retencion-fuente", label: "Retención en la fuente" },
     ],
     retencion: [
       { id: "certificado-gastos", label: "Certificado de gastos servicios funerarios" },
@@ -376,9 +376,7 @@ export default function SolicitudesPage() {
             }
           : {
               ...opcionesPorProducto,
-              contrato: opcionesPorProducto.contrato.filter(
-                (opcion) => opcion.id !== "retencion-fuente"
-              ),
+              contrato: opcionesPorProducto.contrato,
             };
 
   const obtenerNombreCertificado = () => {
@@ -1996,9 +1994,7 @@ export default function SolicitudesPage() {
       <div className="flex items-start gap-3">
         <Info className="mt-0.5 h-5 w-5 flex-none text-[#0090D1]" />
         <p>
-          Tu solicitud está siendo procesada. Por favor, espera un momento
-          mientras generamos tu certificado. Una vez esté listo, será enviado
-          al correo electrónico registrado en nuestros sistemas.
+        Tu solicitud está siendo procesada. Estamos consultando la información disponible para generar tu certificado. Si encontramos información asociada, el certificado será enviado al correo electrónico registrado en nuestros sistemas. En caso contrario, no se generará el certificado.
         </p>
       </div>
     </div>

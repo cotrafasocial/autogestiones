@@ -137,18 +137,23 @@ function contratoTieneCartera(contrato: ContratoKaring) {
       return "";
     }
   
-    const fecha = new Date(fechaTexto);
+    const fechaLimpia = fechaTexto.trim();
   
-    if (isNaN(fecha.getTime())) {
-      return "";
+    const coincidenciaIso = fechaLimpia.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  
+    if (coincidenciaIso) {
+      const [, anio, mes, dia] = coincidenciaIso;
+      return `${dia}/${mes}/${anio}`;
     }
   
-    return fecha.toLocaleDateString("es-CO", {
-      timeZone: "America/Bogota",
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-    });
+    const coincidenciaLatina = fechaLimpia.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  
+    if (coincidenciaLatina) {
+      const [, dia, mes, anio] = coincidenciaLatina;
+      return `${dia.padStart(2, "0")}/${mes.padStart(2, "0")}/${anio}`;
+    }
+  
+    return "";
   }
   
   function obtenerFallecidoDesdeDetalle(
