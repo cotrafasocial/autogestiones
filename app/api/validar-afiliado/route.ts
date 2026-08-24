@@ -80,10 +80,10 @@ async function obtenerToken() {
       return false;
     }
   
-    const tipoOrganizacion = Number(tercero.tipo_organizacion);
+    const terceroCategoria = String(tercero.tercero_categoria || "").trim();
     const estado = String(tercero.estado || "").trim().toUpperCase();
   
-    return [1, 2].includes(tipoOrganizacion) && estado === "A";
+    return estado === "A" && terceroCategoria === "2";
   }
 
   type ContratoKaring = Record<string, unknown>;
@@ -214,14 +214,6 @@ function contratoEsEmpresarial(contrato: ContratoKaring) {
     token: string
   ) {
     const tercero = await consultarTercero(identificacion, token);
-  
-    console.log("TERCERO VALIDAR AFILIADO:", {
-      identificacion,
-      tercero,
-      tipoOrganizacion: tercero?.tipo_organizacion,
-      estado: tercero?.estado,
-      esProveedor: terceroEsProveedorValido(tercero),
-    });
   
     return terceroEsProveedorValido(tercero);
   }

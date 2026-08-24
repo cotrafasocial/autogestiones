@@ -184,13 +184,6 @@ async function obtenerToken() {
 
   const token = textoRespuesta.replace(/^"|"$/g, "").trim();
 
-  console.log("TOKEN RETENCION DEBUG:", {
-    authUrl,
-    tokenLength: token.length,
-    tokenInicio: token.slice(0, 20),
-    tokenFin: token.slice(-20),
-  });
-
   if (!token) {
     throw new Error("Karing autenticó, pero no devolvió token.");
   }
@@ -235,10 +228,9 @@ function terceroEsProveedorValido(tercero: Record<string, unknown> | null) {
     return false;
   }
 
-  const tipoOrganizacion = Number(tercero.tipo_organizacion);
   const estado = String(tercero.estado || "").trim().toUpperCase();
 
-  return [1, 2].includes(tipoOrganizacion) && estado === "A";
+  return estado === "A";
 }
 
 async function consultarProveedorValido(
@@ -778,6 +770,30 @@ function construirParametrosGetInformes(identificacionProveedor: string) {
   ].join(";");
 }
 
+function pdfRetencionTieneContenidoValido(pdfBytes: Buffer) {
+  const textoInicial = pdfBytes.subarray(0, 3000).toString("latin1").toLowerCase();
+
+  const mensajesError = [
+    "the current data set presented",
+    "did not produce any significant content",
+    "no pages were generated",
+  ];
+
+  const contieneMensajeError = mensajesError.some((mensaje) =>
+    textoInicial.includes(mensaje)
+  );
+
+  if (contieneMensajeError) {
+    return false;
+  }
+
+  if (pdfBytes.length < 5000) {
+    return false;
+  }
+
+  return true;
+}
+
 async function consultarPdfRetencionKaring(datos: {
   identificacionProveedor: string;
   token: string;
@@ -833,6 +849,15 @@ async function consultarPdfRetencionKaring(datos: {
   }
   
   if (!buffer.subarray(0, 5).toString("utf8").startsWith("%PDF-")) {
+    return null;
+  }
+  
+  if (!pdfRetencionTieneContenidoValido(buffer)) {
+    console.log("RETENCION: Karing devolvió PDF sin contenido válido.", {
+      identificacionProveedor: datos.identificacionProveedor,
+      bufferLength: buffer.length,
+    });
+  
     return null;
   }
   
@@ -1002,93 +1027,77 @@ export async function POST(request: Request) {
         ? planes.map((plan) => plan.producto).filter(Boolean).join(" / ")
         : "Proveedor";
 
-    try {
-      const pdfKaring = await consultarPdfRetencionKaring({
-        identificacionProveedor: proveedor.identificacion || identificacionTexto,
-        token,
-      });
-
-      if (!pdfKaring) {
-        throw new Error("GetInformes no devolvió un PDF válido.");
-      }
-
-      const codigoAutenticidad = generarCodigoAutenticidad();
-
-      let pdfConQr = pdfKaring;
-      
-      try {
-        pdfConQr = await desencriptarPdfSinClave(pdfKaring);
-        console.log("RETENCION PDF: se enviará PDF sin clave.");
-      } catch (errorDesencriptar) {
-        console.error(
-          "RETENCION PDF: no fue posible quitar la clave. Se enviará el PDF original de Karing:",
-          errorDesencriptar
+        const pdfKaring = await consultarPdfRetencionKaring({
+          identificacionProveedor: proveedor.identificacion || identificacionTexto,
+          token,
+        });
+    
+        if (!pdfKaring) {
+          return NextResponse.json(
+            {
+              ok: false,
+              estado: "sin-retencion",
+              message:
+                "No encontramos certificado de Retención en la fuente disponible para el documento ingresado.",
+            },
+            { status: 404 }
+          );
+        }
+    
+        const codigoAutenticidad = generarCodigoAutenticidad();
+    
+        let pdfConQr = pdfKaring;
+    
+        try {
+          pdfConQr = await desencriptarPdfSinClave(pdfKaring);
+          console.log("RETENCION PDF: se enviará PDF sin clave.");
+        } catch (errorDesencriptar) {
+          console.error(
+            "RETENCION PDF: no fue posible quitar la clave. Se enviará el PDF original de Karing:",
+            errorDesencriptar
+          );
+        }
+    
+        const datosDoc = JSON.stringify([
+          {
+            certificado: "Certificado de Retención en la fuente",
+            tipoSolicitante: "retencion",
+            estado: "generado automatico",
+            nombre: proveedor.nombre,
+            identificacion: proveedor.identificacion,
+            correoRelacionado: proveedor.email,
+            contratos: contratosTexto,
+            productos: productosTexto,
+            fuente: "GetInformes",
+          },
+        ]);
+    
+        await registrarSolicitudEnSheets({
+          fechaCreacion: obtenerFechaRegistroTexto(),
+          usuCreacion: identificacionTexto,
+          codigoDoc: codigoAutenticidad,
+          tipoDoc: "Certificado de Retención en la fuente",
+          quienNecesitaDoc: "Proveedor",
+          dirigidoADoc: "No aplica",
+          datosDoc,
+        });
+    
+        await enviarCertificadoPorCorreo({
+          destinatario: proveedor.email,
+          nombreAfiliado: proveedor.nombre,
+          pdfBytes: pdfConQr,
+          codigoAutenticidad,
+        });
+    
+        return NextResponse.json(
+          {
+            ok: true,
+            estado: "generado",
+            message:
+              "Tu certificado de Retención en la fuente fue generado exitosamente y enviado al correo electrónico registrado.",
+          },
+          { status: 200 }
         );
-      }
-
-      const datosDoc = JSON.stringify([
-        {
-          certificado: "Certificado de Retención en la fuente",
-          tipoSolicitante: "proveedor",
-          estado: "generado automatico",
-          nombre: proveedor.nombre,
-          identificacion: proveedor.identificacion,
-          correoRelacionado: proveedor.email,
-          contratos: contratosTexto,
-          productos: productosTexto,
-          fuente: "GetInformes",
-        },
-      ]);
-
-      await registrarSolicitudEnSheets({
-        fechaCreacion: obtenerFechaRegistroTexto(),
-        usuCreacion: identificacionTexto,
-        codigoDoc: codigoAutenticidad,
-        tipoDoc: "Certificado de Retención en la fuente",
-        quienNecesitaDoc: "Proveedor",
-        dirigidoADoc: "No aplica",
-        datosDoc,
-      });
-
-      await enviarCertificadoPorCorreo({
-        destinatario: proveedor.email,
-        nombreAfiliado: proveedor.nombre,
-        pdfBytes: pdfConQr,
-        codigoAutenticidad,
-      });
-
-      return NextResponse.json(
-        {
-          ok: true,
-          estado: "generado",
-          message:
-            "Tu certificado de Retención en la fuente fue generado exitosamente y enviado al correo electrónico registrado.",
-        },
-        { status: 200 }
-      );
-    } catch (errorPdf) {
-      console.error(
-        "No fue posible generar automáticamente la retención. Se crea solicitud manual:",
-        errorPdf
-      );
-
-      await registrarSolicitudManualRetencion({
-        identificacionTexto,
-        proveedor,
-        contratosTexto,
-        productosTexto,
-      });
-      
-      return NextResponse.json(
-        {
-          ok: true,
-          estado: "solicitud",
-          message:
-            "Solicitud enviada exitosamente.\n\nNo fue posible generar automáticamente el certificado en este momento. Tu solicitud ha sido recibida y será validada por nuestro equipo.",
-        },
-        { status: 200 }
-      );
-    }
   } catch (error) {
     console.error("Error generando certificado de Retención en la fuente:", error);
 
