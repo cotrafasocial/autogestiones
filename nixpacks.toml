@@ -1,5 +1,11 @@
+[variables]
+NODE_OPTIONS = "--max-old-space-size=4096"
+NEXT_TELEMETRY_DISABLED = "1"
+NPM_CONFIG_PRODUCTION = "false"
+
 [phases.setup]
 aptPkgs = [
+  "nodejs_22",
   "qpdf",
   "libnss3",
   "libatk1.0-0",
@@ -15,7 +21,7 @@ aptPkgs = [
 ]
 
 [phases.install]
-cmds = ["npm install"]
+cmds = ["npm ci"]
 
 [phases.build]
 cmds = ["npm run build"]
