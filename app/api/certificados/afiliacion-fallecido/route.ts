@@ -45,6 +45,7 @@ const LIMITE_DIARIO_AFILIACION_FALLECIDO = 3;
     contrato: string;
     producto: string;
     cantidadRegistrosCartera: number;
+    esContratoCancelado: boolean;
   };
 
 const PRODUCTOS_EXEQUIALES = new Set([
@@ -74,23 +75,19 @@ function obtenerNumero(valor: unknown) {
 }
 
 function contratoEstaVigente(contrato: ContratoKaring) {
-  const finalizaVigenciaTexto = obtenerTexto(contrato.finaliza_vigencia);
+  const renovacion = String(contrato.renovacion ?? "")
+    .trim()
+    .toUpperCase();
 
-  if (!finalizaVigenciaTexto) {
-    return false;
-  }
+  return renovacion !== "C";
+}
 
-  const finalizaVigencia = new Date(finalizaVigenciaTexto);
+function contratoEstaCancelado(contrato: ContratoKaring) {
+  const renovacion = String(contrato.renovacion ?? "")
+    .trim()
+    .toUpperCase();
 
-  if (isNaN(finalizaVigencia.getTime())) {
-    return false;
-  }
-
-  const hoy = new Date();
-  hoy.setHours(0, 0, 0, 0);
-  finalizaVigencia.setHours(0, 0, 0, 0);
-
-  return finalizaVigencia >= hoy;
+  return renovacion === "C";
 }
 
 function contratoEsExequial(contrato: ContratoKaring) {
@@ -121,7 +118,11 @@ function contratoTieneActionActiva(contrato: ContratoKaring) {
 
 function obtenerContratosEmpresarialesVigentes(contratos: ContratoKaring[]) {
   return contratos.filter((contrato) => {
-    return contratoTieneActionActiva(contrato) && contratoEsEmpresarial(contrato);
+    return (
+      contratoTieneActionActiva(contrato) &&
+      contratoEstaVigente(contrato) &&
+      contratoEsEmpresarial(contrato)
+    );
   });
 }
 
@@ -970,6 +971,8 @@ const titularHistorico = obtenerTitularHistoricoEnFecha(
     const beneficiarios: BeneficiarioCertificado[] = [];
   
     for (const contrato of contratosExequiales) {
+      const esContratoCancelado = contratoEstaCancelado(contrato);
+    
       const numeroContrato = obtenerTexto(contrato.contrato);
   
       if (!numeroContrato) {
@@ -999,23 +1002,66 @@ const titularHistorico = obtenerTitularHistoricoEnFecha(
       }
   
       if (carteraControl.length > 0) {
-        contratosMorosos.push({
-          contrato: numeroContrato,
-          producto,
-          cantidadRegistrosCartera: carteraControl.length,
-        });
-  
+        const contratosMorososDetalle = new Map<string, ContratoMoroso>();
+      
+        for (const itemCartera of carteraControl) {
+          if (
+            !itemCartera ||
+            typeof itemCartera !== "object" ||
+            Array.isArray(itemCartera)
+          ) {
+            continue;
+          }
+      
+          const cartera = itemCartera as Record<string, unknown>;
+      
+          const contratoCartera =
+            obtenerTexto(cartera.contrato) ||
+            obtenerTexto(cartera.numero_contrato) ||
+            obtenerTexto(cartera.contrato_prevision) ||
+            numeroContrato;
+      
+          const contratoRelacionado = contratosExequiales.find((contratoItem) => {
+            return obtenerTexto(contratoItem.contrato) === contratoCartera;
+          });
+      
+          const esContratoCanceladoCartera = contratoRelacionado
+            ? contratoEstaCancelado(contratoRelacionado)
+            : esContratoCancelado;
+      
+          const productoCartera = contratoRelacionado
+            ? obtenerTexto(contratoRelacionado.nombre_producto) ||
+              obtenerTexto(contratoRelacionado.descripcion_producto) ||
+              obtenerTexto(contratoRelacionado.producto) ||
+              producto
+            : producto;
+      
+          const contratoExistente = contratosMorososDetalle.get(contratoCartera);
+      
+          contratosMorososDetalle.set(contratoCartera, {
+            contrato: contratoCartera,
+            producto: productoCartera,
+            cantidadRegistrosCartera:
+              (contratoExistente?.cantidadRegistrosCartera || 0) + 1,
+            esContratoCancelado: esContratoCanceladoCartera,
+          });
+        }
+      
+        contratosMorosos.push(...contratosMorososDetalle.values());
+      
         continue;
       }
   
-      planes.push({
-        contrato: numeroContrato,
-        producto,
-        finalizaVigencia:
-          obtenerTexto(contrato.finaliza_vigencia) ||
-          obtenerTexto(contrato.finalizaVigencia) ||
-          null,
-      });
+      if (!esContratoCancelado) {
+        planes.push({
+          contrato: numeroContrato,
+          producto,
+          finalizaVigencia:
+            obtenerTexto(contrato.finaliza_vigencia) ||
+            obtenerTexto(contrato.finalizaVigencia) ||
+            null,
+        });
+      }
     }
   
     const beneficiariosUnicos = Array.from(
@@ -1370,7 +1416,7 @@ function generarHtmlCorreoRevisionFallecido(datos: {
 
                     <p style="margin:24px 0 0; color:#4b5563; font-size:15px; line-height:1.7;">
                       Para continuar con la generación del certificado, te invitamos a ponerte
-                      al día o comunicarte con nuestra línea de atención al cliente 456 7000para recibir acompañamiento.
+                      al día o comunicarte con nuestra línea de atención al cliente 456 7000 para recibir acompañamiento.
                     </p>
 
                     <p style="margin:20px 0 0; color:#4b5563; font-size:15px; line-height:1.7;">
@@ -1426,20 +1472,37 @@ async function enviarCorreoContratosMorosos(datos: {
     },
   });
 
-  const contratosHtml = datos.contratosMorosos
-    .map(
-      (item) => `
-        <li>
-          Contrato <strong>${item.contrato}</strong>
-          ${
-            item.producto
-              ? ` - Producto: <strong>${item.producto}</strong>`
-              : ""
-          }
-        </li>
-      `
-    )
-    .join("");
+  const contratosActivosMorosos = datos.contratosMorosos.filter(
+    (item) => !item.esContratoCancelado
+  );
+  
+  const hayContratosCanceladosMorosos = datos.contratosMorosos.some(
+    (item) => item.esContratoCancelado
+  );
+  
+  const contratosHtml =
+    contratosActivosMorosos.length > 0
+      ? contratosActivosMorosos
+          .map(
+            (item) => `
+              <li>
+                Contrato <strong>${item.contrato}</strong>
+                ${
+                  item.producto
+                    ? ` - Producto: <strong>${item.producto}</strong>`
+                    : ""
+                }
+              </li>
+            `
+          )
+          .join("")
+      : hayContratosCanceladosMorosos
+        ? `
+          <li>
+            Presentas cartera pendiente asociada a un contrato cancelado.
+          </li>
+        `
+        : "";
 
   await transporter.sendMail({
     from: `"Cotrafa Social" <${from}>`,
@@ -2041,10 +2104,16 @@ async function generarPdfAfiliacionFallecido(datos: {
   
           const contratos = await consultarContratos(String(identificacion).trim());
 
+          const contratosExequialesVigentes =
+            obtenerContratosExequialesVigentes(contratos);
+
           const contratosEmpresarialesVigentes =
             obtenerContratosEmpresarialesVigentes(contratos);
-          
-          if (contratosEmpresarialesVigentes.length > 0) {
+
+          if (
+            contratosExequialesVigentes.length === 0 &&
+            contratosEmpresarialesVigentes.length > 0
+          ) {
             const datosTitularEmpresarial = obtenerDatosTitular(
               contratosEmpresarialesVigentes
             );
@@ -2151,8 +2220,6 @@ async function generarPdfAfiliacionFallecido(datos: {
             );
           }
           
-          const contratosExequialesVigentes =
-            obtenerContratosExequialesVigentes(contratos);
           
           if (contratosExequialesVigentes.length === 0) {
         return NextResponse.json(
@@ -2166,7 +2233,7 @@ async function generarPdfAfiliacionFallecido(datos: {
       }
   
       const resultadoPlanes = await obtenerPlanesExequialesAlDia(
-        contratosExequialesVigentes,
+        contratos.filter((contrato) => contratoEsExequial(contrato)),
         String(identificacion).trim()
       );
   

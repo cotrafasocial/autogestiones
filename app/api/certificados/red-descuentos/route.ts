@@ -63,23 +63,19 @@ function obtenerNumero(valor: unknown) {
 }
 
 function contratoEstaVigente(contrato: ContratoKaring) {
-  const finalizaVigenciaTexto = obtenerTexto(contrato.finaliza_vigencia);
+  const renovacion = String(contrato.renovacion ?? "")
+    .trim()
+    .toUpperCase();
 
-  if (!finalizaVigenciaTexto) {
-    return false;
-  }
+  return renovacion !== "C";
+}
 
-  const finalizaVigencia = new Date(finalizaVigenciaTexto);
+function contratoEstaCancelado(contrato: ContratoKaring) {
+  const renovacion = String(contrato.renovacion ?? "")
+    .trim()
+    .toUpperCase();
 
-  if (isNaN(finalizaVigencia.getTime())) {
-    return false;
-  }
-
-  const hoy = new Date();
-  hoy.setHours(0, 0, 0, 0);
-  finalizaVigencia.setHours(0, 0, 0, 0);
-
-  return finalizaVigencia >= hoy;
+  return renovacion === "C";
 }
 
 function contratoEsExequial(contrato: ContratoKaring) {
@@ -168,7 +164,11 @@ function contratoTieneActionActiva(contrato: ContratoKaring) {
 
 function obtenerContratosEmpresarialesVigentes(contratos: ContratoKaring[]) {
   return contratos.filter((contrato) => {
-    return contratoTieneActionActiva(contrato) && contratoEsEmpresarial(contrato);
+    return (
+      contratoTieneActionActiva(contrato) &&
+      contratoEstaVigente(contrato) &&
+      contratoEsEmpresarial(contrato)
+    );
   });
 }
 
@@ -515,21 +515,24 @@ function obtenerCarteraControlDesdeDetalle(detalleContrato: unknown) {
   return null;
 }
 
+type ContratoMorosoRedDescuentos = {
+  contrato: string;
+  cantidadRegistrosCartera: number;
+  esContratoCancelado: boolean;
+};
+
 async function obtenerEstadoCarteraContratosExequiales(
   contratosExequiales: ContratoKaring[]
 ) {
   const token = await obtenerToken();
 
-  const contratosMorosos: {
-    contrato: string;
-    cantidadRegistrosCartera: number;
-  }[] = [];
+  const contratosMorososPorNumero = new Map<string, ContratoMorosoRedDescuentos>();
 
   for (const contrato of contratosExequiales) {
     const numeroContrato = obtenerTexto(contrato.contrato);
 
     if (!numeroContrato) {
-      throw new Error("Un contrato exequial vigente no tiene número de contrato.");
+      continue;
     }
 
     const detalleContrato = await consultarContratoPorNumero(numeroContrato, token);
@@ -541,18 +544,51 @@ async function obtenerEstadoCarteraContratosExequiales(
     }
 
     if (carteraControl.length > 0) {
-      contratosMorosos.push({
-        contrato: numeroContrato,
-        cantidadRegistrosCartera: carteraControl.length,
-      });
+      for (const itemCartera of carteraControl) {
+        if (
+          !itemCartera ||
+          typeof itemCartera !== "object" ||
+          Array.isArray(itemCartera)
+        ) {
+          continue;
+        }
+
+        const cartera = itemCartera as Record<string, unknown>;
+
+        const contratoCartera =
+          obtenerTexto(cartera.contrato) ||
+          obtenerTexto(cartera.numero_contrato) ||
+          obtenerTexto(cartera.contrato_prevision) ||
+          numeroContrato;
+
+        const contratoRelacionado = contratosExequiales.find((contratoItem) => {
+          return obtenerTexto(contratoItem.contrato) === contratoCartera;
+        });
+
+        const esContratoCanceladoCartera = contratoRelacionado
+          ? contratoEstaCancelado(contratoRelacionado)
+          : contratoEstaCancelado(contrato);
+
+        const contratoExistente = contratosMorososPorNumero.get(contratoCartera);
+
+        contratosMorososPorNumero.set(contratoCartera, {
+          contrato: contratoCartera,
+          cantidadRegistrosCartera:
+            (contratoExistente?.cantidadRegistrosCartera || 0) + 1,
+          esContratoCancelado: esContratoCanceladoCartera,
+        });
+      }
     }
   }
+
+  const contratosMorosos = Array.from(contratosMorososPorNumero.values());
 
   return {
     estaAlDia: contratosMorosos.length === 0,
     contratosMorosos,
   };
 }
+  
 
 function obtenerFechaActualTexto() {
   return new Date().toLocaleDateString("es-CO", {
@@ -879,10 +915,7 @@ async function enviarCorreoContratosMorosos(datos: {
   destinatario: string;
   nombre: string;
   identificacion: string;
-  contratosMorosos: {
-    contrato: string;
-    cantidadRegistrosCartera: number;
-  }[];
+  contratosMorosos: ContratoMorosoRedDescuentos[];
 }) {
   const host = process.env.SMTP_HOST;
   const port = Number(process.env.SMTP_PORT || 465);
@@ -904,15 +937,32 @@ async function enviarCorreoContratosMorosos(datos: {
     },
   });
 
-  const contratosHtml = datos.contratosMorosos
-    .map(
-      (item) => `
-        <li>
-          Contrato <strong>${item.contrato}</strong>
-        </li>
-      `
-    )
-    .join("");
+  const contratosActivosMorosos = datos.contratosMorosos.filter(
+    (item) => !item.esContratoCancelado
+  );
+  
+  const hayContratosCanceladosMorosos = datos.contratosMorosos.some(
+    (item) => item.esContratoCancelado
+  );
+  
+  const contratosHtml =
+    contratosActivosMorosos.length > 0
+      ? contratosActivosMorosos
+          .map(
+            (item) => `
+              <li>
+                Contrato <strong>${item.contrato}</strong>
+              </li>
+            `
+          )
+          .join("")
+      : hayContratosCanceladosMorosos
+        ? `
+          <li>
+            Presentas cartera pendiente asociada a un contrato cancelado.
+          </li>
+        `
+        : "";
 
   await transporter.sendMail({
     from: `"Cotrafa Social" <${from}>`,
@@ -1887,10 +1937,16 @@ export async function POST(request: Request) {
 
       const contratos = await consultarContratos(String(identificacion).trim());
 
+      const contratosExequialesVigentes =
+        obtenerContratosExequialesVigentes(contratos);
+      
       const contratosEmpresarialesVigentes =
         obtenerContratosEmpresarialesVigentes(contratos);
       
-      if (contratosEmpresarialesVigentes.length > 0) {
+      if (
+        contratosExequialesVigentes.length === 0 &&
+        contratosEmpresarialesVigentes.length > 0
+      ) {
         const datosTitularEmpresarial = obtenerDatosTitular(
           contratosEmpresarialesVigentes
         );
@@ -2007,8 +2063,6 @@ export async function POST(request: Request) {
         );
       }
       
-      const contratosExequialesVigentes =
-        obtenerContratosExequialesVigentes(contratos);
       
       if (contratosExequialesVigentes.length === 0) {
   return NextResponse.json(
@@ -2021,7 +2075,7 @@ export async function POST(request: Request) {
 }
 
 const estadoCartera = await obtenerEstadoCarteraContratosExequiales(
-  contratosExequialesVigentes
+  contratos.filter((contrato) => contratoEsExequial(contrato))
 );
 
 if (!estadoCartera.estaAlDia) {

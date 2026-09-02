@@ -42,6 +42,14 @@ function obtenerNumero(valor: unknown) {
   return null;
 }
 
+function contratoEstaVigente(contrato: ContratoKaring) {
+  const renovacion = String(contrato.renovacion ?? "")
+    .trim()
+    .toUpperCase();
+
+  return renovacion !== "C";
+}
+
 function contratoEsExequial(contrato: ContratoKaring) {
   const productoPrevision = obtenerNumero(contrato.producto_prevision);
 
@@ -70,12 +78,18 @@ function contratoTieneActionActiva(contrato: ContratoKaring) {
 
 function obtenerContratosEmpresarialesActivos(contratos: ContratoKaring[]) {
   return contratos.filter((contrato) => {
-    return contratoTieneActionActiva(contrato) && contratoEsEmpresarial(contrato);
+    return (
+      contratoTieneActionActiva(contrato) &&
+      contratoEstaVigente(contrato) &&
+      contratoEsEmpresarial(contrato)
+    );
   });
 }
 
 function obtenerContratosExequiales(contratos: ContratoKaring[]) {
-  return contratos.filter((contrato) => contratoEsExequial(contrato));
+  return contratos.filter((contrato) => {
+    return contratoEstaVigente(contrato) && contratoEsExequial(contrato);
+  });
 }
 
 function obtenerTipoIdentificacionTexto(codigo: string | null) {
@@ -560,11 +574,12 @@ const contratosEmpresarialesActivos =
 const contratosExequiales = obtenerContratosExequiales(contratos);
 
 const contratosParaSolicitud =
-  contratosEmpresarialesActivos.length > 0
-    ? contratosEmpresarialesActivos
-    : contratosExequiales;
+  contratosExequiales.length > 0
+    ? contratosExequiales
+    : contratosEmpresarialesActivos;
 
-const esSolicitudEmpresarial = contratosEmpresarialesActivos.length > 0;
+const esSolicitudEmpresarial =
+  contratosExequiales.length === 0 && contratosEmpresarialesActivos.length > 0;
 
 if (contratosParaSolicitud.length === 0) {
   return NextResponse.json(

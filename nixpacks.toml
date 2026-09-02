@@ -11,8 +11,7 @@ aptPkgs = [
   "libxss1",
   "libgtk-3-0",
   "libxshmfence1",
-  "libglu1",
-  "chromium"
+  "libglu1"
 ]
 
 [phases.install]

@@ -31,6 +31,7 @@ const LIMITE_DIARIO_AFILIACION_NUCLEO = 3;
     contrato: string;
     producto: string;
     cantidadRegistrosCartera: number;
+    esContratoCancelado: boolean;
   };
 
 const PRODUCTOS_EXEQUIALES = new Set([
@@ -60,23 +61,19 @@ function obtenerNumero(valor: unknown) {
 }
 
 function contratoEstaVigente(contrato: ContratoKaring) {
-  const finalizaVigenciaTexto = obtenerTexto(contrato.finaliza_vigencia);
+  const renovacion = String(contrato.renovacion ?? "")
+    .trim()
+    .toUpperCase();
 
-  if (!finalizaVigenciaTexto) {
-    return false;
-  }
+  return renovacion !== "C";
+}
 
-  const finalizaVigencia = new Date(finalizaVigenciaTexto);
+function contratoEstaCancelado(contrato: ContratoKaring) {
+  const renovacion = String(contrato.renovacion ?? "")
+    .trim()
+    .toUpperCase();
 
-  if (isNaN(finalizaVigencia.getTime())) {
-    return false;
-  }
-
-  const hoy = new Date();
-  hoy.setHours(0, 0, 0, 0);
-  finalizaVigencia.setHours(0, 0, 0, 0);
-
-  return finalizaVigencia >= hoy;
+  return renovacion === "C";
 }
 
 function contratoEsExequial(contrato: ContratoKaring) {
@@ -107,7 +104,11 @@ function contratoTieneActionActiva(contrato: ContratoKaring) {
 
 function obtenerContratosEmpresarialesVigentes(contratos: ContratoKaring[]) {
   return contratos.filter((contrato) => {
-    return contratoTieneActionActiva(contrato) && contratoEsEmpresarial(contrato);
+    return (
+      contratoTieneActionActiva(contrato) &&
+      contratoEstaVigente(contrato) &&
+      contratoEsEmpresarial(contrato)
+    );
   });
 }
 
@@ -394,24 +395,61 @@ function obtenerNombreProductoDesdeDetalle(detalleContrato: unknown) {
       "1": "Padre",
       "2": "Madre",
       "3": "Hermano(a)",
-      "4": "Hermano(a)",
+      "4": "Suegro(a)",
       "5": "Hijo(a)",
-      "6": "Hijo(a)",
       "7": "Titular",
-      "8": "Abuelo(a)",
-      "9": "Nieto(a)",
-      "10": "Suegro(a)",
-      "11": "Yerno/Nuera",
-      "12": "Tío(a)",
-      "13": "Beneficiario",
-      "99": "Otro",
+      "10": "Nuera",
+      "11": "Cuñado",
+      "12": "Tío",
+      "13": "Sobrino(a)",
+      "14": "Nieto(a)",
+      "15": "Abuelo(a)",
+      "16": "Hijastro(a)",
+      "17": "Padrastro",
+      "18": "Madrastra",
+      "20": "Primo(a)",
+      "21": "Esposo(a)",
+      "23": "Bisnieto(a)",
+      "24": "Bisabuelo(a)",
+      "25": "Compañero Permanente",
+      "30": "Hermanastro(a)",
+      "33": "Yerno",
+      "34": "Abuelo del Cónyuge",
+      "35": "No Aplica",
+      "36": "Hijo Adoptivo",
+      "37": "Mascotas",
+      "38": "Titular Protegido",
+      "99": "Particular",
     };
   
     if (!codigo) {
       return "Beneficiario";
     }
   
-    return parentescos[codigo.trim()] || "Beneficiario";
+    const codigoLimpio = codigo.trim();
+  
+    return parentescos[codigoLimpio] || codigoLimpio;
+  }
+
+  function obtenerParentescoPersona(persona: Record<string, unknown>) {
+    const posiblesTextos = [
+      persona.descripcion_parentesco,
+      persona.parentesco_descripcion,
+      persona.nombre_parentesco,
+      persona.parentesco_nombre,
+      persona.descripcionParentesco,
+      persona.parentesco_texto,
+    ];
+  
+    for (const valor of posiblesTextos) {
+      const texto = obtenerTexto(valor);
+  
+      if (texto && isNaN(Number(texto))) {
+        return texto;
+      }
+    }
+  
+    return obtenerParentescoTexto(obtenerTexto(persona.parentesco));
   }
   
   function obtenerBeneficiariosActivosDesdeDetalle(
@@ -483,7 +521,7 @@ function obtenerNombreProductoDesdeDetalle(detalleContrato: unknown) {
         nombreCompleto,
         documento: formatearDocumento(identificacion),
         documentoNormalizado,
-        parentesco: obtenerParentescoTexto(obtenerTexto(persona.parentesco)),
+        parentesco: obtenerParentescoPersona(persona),
         fechaAfiliacion: formatearFechaCorta(fechaAfiliacionTexto),
       };
   
@@ -521,12 +559,14 @@ function obtenerNombreProductoDesdeDetalle(detalleContrato: unknown) {
     const beneficiarios: BeneficiarioCertificado[] = [];
   
     for (const contrato of contratosExequiales) {
+      const esContratoCancelado = contratoEstaCancelado(contrato);
+    
       const numeroContrato = obtenerTexto(contrato.contrato);
-  
+    
       if (!numeroContrato) {
         throw new Error("Un contrato exequial vigente no tiene número de contrato.");
       }
-  
+    
       const detalleContrato = await consultarContratoPorNumero(numeroContrato, token);
 
       const beneficiariosContrato = obtenerBeneficiariosActivosDesdeDetalle(
@@ -554,19 +594,22 @@ function obtenerNombreProductoDesdeDetalle(detalleContrato: unknown) {
           contrato: numeroContrato,
           producto,
           cantidadRegistrosCartera: carteraControl.length,
+          esContratoCancelado,
         });
-  
+      
         continue;
       }
   
-      planes.push({
-        contrato: numeroContrato,
-        producto,
-        finalizaVigencia:
-          obtenerTexto(contrato.finaliza_vigencia) ||
-          obtenerTexto(contrato.finalizaVigencia) ||
-          null,
-      });
+      if (!esContratoCancelado) {
+        planes.push({
+          contrato: numeroContrato,
+          producto,
+          finalizaVigencia:
+            obtenerTexto(contrato.finaliza_vigencia) ||
+            obtenerTexto(contrato.finalizaVigencia) ||
+            null,
+        });
+      }
     }
   
     const beneficiariosUnicos = Array.from(
@@ -1060,20 +1103,37 @@ async function enviarCorreoContratosMorosos(datos: {
     },
   });
 
-  const contratosHtml = datos.contratosMorosos
-    .map(
-      (item) => `
-        <li>
-          Contrato <strong>${item.contrato}</strong>
-          ${
-            item.producto
-              ? ` - Producto: <strong>${item.producto}</strong>`
-              : ""
-          }
-        </li>
-      `
-    )
-    .join("");
+  const contratosActivosMorosos = datos.contratosMorosos.filter(
+    (item) => !item.esContratoCancelado
+  );
+  
+  const hayContratosCanceladosMorosos = datos.contratosMorosos.some(
+    (item) => item.esContratoCancelado
+  );
+  
+  const contratosHtml =
+    contratosActivosMorosos.length > 0
+      ? contratosActivosMorosos
+          .map(
+            (item) => `
+              <li>
+                Contrato <strong>${item.contrato}</strong>
+                ${
+                  item.producto
+                    ? ` - Producto: <strong>${item.producto}</strong>`
+                    : ""
+                }
+              </li>
+            `
+          )
+          .join("")
+      : hayContratosCanceladosMorosos
+        ? `
+          <li>
+            Presentas cartera pendiente asociada a un contrato cancelado.
+          </li>
+        `
+        : "";
 
   await transporter.sendMail({
     from: `"Cotrafa Social" <${from}>`,
@@ -1875,10 +1935,16 @@ export async function POST(request: Request) {
 
       const contratos = await consultarContratos(String(identificacion).trim());
 
-      const contratosEmpresarialesVigentes =
-        obtenerContratosEmpresarialesVigentes(contratos);
-      
-      if (contratosEmpresarialesVigentes.length > 0) {
+const contratosExequialesVigentes =
+  obtenerContratosExequialesVigentes(contratos);
+
+const contratosEmpresarialesVigentes =
+  obtenerContratosEmpresarialesVigentes(contratos);
+
+if (
+  contratosExequialesVigentes.length === 0 &&
+  contratosEmpresarialesVigentes.length > 0
+) {
         const datosTitularEmpresarial = obtenerDatosTitular(
           contratosEmpresarialesVigentes
         );
@@ -1995,8 +2061,6 @@ export async function POST(request: Request) {
         );
       }
       
-      const contratosExequialesVigentes =
-        obtenerContratosExequialesVigentes(contratos);
       
       if (contratosExequialesVigentes.length === 0) {
   return NextResponse.json(
@@ -2009,7 +2073,7 @@ export async function POST(request: Request) {
 }
 
 const resultadoPlanes = await obtenerPlanesExequialesAlDia(
-  contratosExequialesVigentes,
+  contratos.filter((contrato) => contratoEsExequial(contrato)),
   String(identificacion).trim()
 );
 

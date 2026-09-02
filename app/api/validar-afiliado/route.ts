@@ -149,33 +149,11 @@ function contratoEsEmpresarial(contrato: ContratoKaring) {
   }
 
   function contratoEstaActivo(contrato: ContratoKaring) {
-    const actionActiva =
-      String(contrato.action ?? "").trim().toUpperCase() === "A";
+    const renovacion = String(contrato.renovacion ?? "")
+      .trim()
+      .toUpperCase();
   
-    if (!actionActiva) {
-      return false;
-    }
-  
-    if (contratoEsEmpresarial(contrato)) {
-      return true;
-    }
-  
-    const hoy = new Date();
-    hoy.setHours(0, 0, 0, 0);
-  
-    const finalizaVigenciaTexto = obtenerTexto(contrato.finaliza_vigencia);
-  
-    const finalizaVigencia = finalizaVigenciaTexto
-      ? new Date(finalizaVigenciaTexto)
-      : null;
-  
-    if (!finalizaVigencia || isNaN(finalizaVigencia.getTime())) {
-      return false;
-    }
-  
-    finalizaVigencia.setHours(0, 0, 0, 0);
-  
-    return finalizaVigencia >= hoy;
+    return renovacion !== "C";
   }
 
  
