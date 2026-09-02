@@ -5,7 +5,6 @@ NPM_CONFIG_PRODUCTION = "false"
 
 [phases.setup]
 aptPkgs = [
-  "nodejs_22",
   "qpdf",
   "libnss3",
   "libatk1.0-0",
