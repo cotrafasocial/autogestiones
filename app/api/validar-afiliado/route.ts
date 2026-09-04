@@ -80,7 +80,9 @@ async function obtenerToken() {
       return false;
     }
   
-    const estado = String(tercero.estado || "").trim().toUpperCase();
+    const estado = String(tercero.estado || "")
+      .trim()
+      .toUpperCase();
   
     const terceroCategoria = String(tercero.tercero_categoria ?? "")
       .trim()
