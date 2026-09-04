@@ -80,10 +80,19 @@ async function obtenerToken() {
       return false;
     }
   
-    const terceroCategoria = String(tercero.tercero_categoria || "").trim();
-    const estado = String(tercero.estado || "").trim().toUpperCase();
+    const estado = String(tercero.estado || "")
+      .trim()
+      .toUpperCase();
   
-    return estado === "A" && terceroCategoria === "2";
+    const terceroCategoria = String(tercero.tercero_categoria ?? "")
+      .trim()
+      .toUpperCase();
+  
+    const tipoOrganizacion = String(tercero.tipo_organizacion ?? "")
+      .trim()
+      .toUpperCase();
+  
+    return estado === "A" && (terceroCategoria === "2" || tipoOrganizacion === "2");
   }
 
   type ContratoKaring = Record<string, unknown>;
