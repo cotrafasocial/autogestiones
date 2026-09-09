@@ -346,18 +346,15 @@ function obtenerNombreProductoDesdeDetalle(detalleContrato: unknown) {
       return "";
     }
   
-    const fecha = new Date(fechaTexto);
+    const match = fechaTexto.match(/^(\d{4})-(\d{2})-(\d{2})/);
   
-    if (isNaN(fecha.getTime())) {
+    if (!match) {
       return "";
     }
   
-    return fecha.toLocaleDateString("es-CO", {
-      timeZone: "America/Bogota",
-      day: "2-digit",
-      month: "2-digit",
-      year: "numeric",
-    });
+    const [, anio, mes, dia] = match;
+  
+    return `${dia}/${mes}/${anio}`;
   }
   
   function formatearDocumento(documento: string | null) {
