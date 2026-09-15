@@ -70,6 +70,26 @@ export default function SolicitudesPage() {
   ] = useState(false);
   const [validandoPlanRedDescuentos, setValidandoPlanRedDescuentos] =
     useState(false);
+
+    const [
+      mostrarModalMiPlanAfiliacionFallecido,
+      setMostrarModalMiPlanAfiliacionFallecido,
+    ] = useState(false);
+    
+    const [
+      validandoMiPlanAfiliacionFallecido,
+      setValidandoMiPlanAfiliacionFallecido,
+    ] = useState(false);
+    
+    const [
+      archivoAdjuntoAfiliacionFallecido,
+      setArchivoAdjuntoAfiliacionFallecido,
+    ] = useState<File | null>(null);
+    
+    const [
+      archivoAdjuntoAfiliacionFallecidoNombre,
+      setArchivoAdjuntoAfiliacionFallecidoNombre,
+    ] = useState("");
   const [fechaInicioDetallePago, setFechaInicioDetallePago] = useState("");
   const [fechaFinDetallePago, setFechaFinDetallePago] = useState("");
   const [enviandoDetallePago, setEnviandoDetallePago] = useState(false);
@@ -387,6 +407,49 @@ export default function SolicitudesPage() {
   
     return certificado?.label || "Certificado";
   };
+
+  const validarMiPlanAfiliacionFallecido = async () => {
+    if (validandoMiPlanAfiliacionFallecido) {
+      return null;
+    }
+  
+    setValidandoMiPlanAfiliacionFallecido(true);
+  
+    try {
+      const respuesta = await fetch(
+        "/api/certificados/afiliacion-fallecido",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            modo: "validar-mi-plan-afiliacion-fallecido",
+            identificacion: identificacion.trim(),
+          }),
+        }
+      );
+  
+      const data = await respuesta.json();
+  
+      if (!respuesta.ok) {
+        alert(
+          data.message ||
+            "No fue posible validar el plan asociado."
+        );
+        return null;
+      }
+  
+      return data.esMiPlan === true;
+    } catch (error) {
+      alert(
+        "No fue posible validar el plan asociado en este momento."
+      );
+      return null;
+    } finally {
+      setValidandoMiPlanAfiliacionFallecido(false);
+    }
+  };
   
 
   const enviarCertificadoAfiliacionFallecidoCorreo = async () => {
@@ -444,6 +507,107 @@ export default function SolicitudesPage() {
       setEntidadCertificado("");
     } catch (error) {
       alert("No fue posible generar el certificado en este momento.");
+    } finally {
+      setEnviandoCanalEnvio(false);
+    }
+  };
+
+  const registrarSolicitudMiPlanAfiliacionFallecido = async () => {
+    if (!documentoBeneficiario.trim()) {
+      alert(
+        "Por favor ingresa el número de documento del beneficiario."
+      );
+      return;
+    }
+  
+    if (!archivoAdjuntoAfiliacionFallecido) {
+      alert("Por favor adjunta el documento de soporte.");
+      return;
+    }
+  
+    const validacionArchivo = validarArchivoDetallePago(
+      archivoAdjuntoAfiliacionFallecido
+    );
+  
+    if (!validacionArchivo.valido) {
+      alert(validacionArchivo.mensaje);
+      return;
+    }
+  
+    setEnviandoCanalEnvio(true);
+  
+    try {
+      const dirigidoA =
+        destinoCertificado === "interesado"
+          ? "A QUIEN PUEDA INTERESAR"
+          : entidadCertificado.trim();
+  
+      const formData = new FormData();
+  
+      formData.append(
+        "modo",
+        "solicitud-mi-plan-afiliacion-fallecido"
+      );
+  
+      formData.append(
+        "identificacion",
+        identificacion.trim()
+      );
+  
+      formData.append(
+        "dirigidoA",
+        dirigidoA
+      );
+  
+      formData.append(
+        "tipoDocumentoBeneficiario",
+        tipoDocumentoBeneficiario
+      );
+  
+      formData.append(
+        "documentoBeneficiario",
+        documentoBeneficiario.trim()
+      );
+  
+      formData.append(
+        "archivoAdjunto",
+        archivoAdjuntoAfiliacionFallecido
+      );
+  
+      const respuesta = await fetch(
+        "/api/certificados/afiliacion-fallecido",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+  
+      const data = await respuesta.json();
+  
+      if (!respuesta.ok) {
+        alert(
+          data.message ||
+            "No fue posible registrar la solicitud."
+        );
+        return;
+      }
+  
+      alert(
+        data.message ||
+          "Tu solicitud ha sido recibida y será validada por nuestro equipo."
+      );
+  
+      setMostrarModalMiPlanAfiliacionFallecido(false);
+      setDocumentoBeneficiario("");
+      setTipoDocumentoBeneficiario("CC");
+      setArchivoAdjuntoAfiliacionFallecido(null);
+      setArchivoAdjuntoAfiliacionFallecidoNombre("");
+      setDestinoCertificado("");
+      setEntidadCertificado("");
+    } catch (error) {
+      alert(
+        "No fue posible registrar la solicitud en este momento."
+      );
     } finally {
       setEnviandoCanalEnvio(false);
     }
@@ -1080,22 +1244,47 @@ export default function SolicitudesPage() {
         alert("Por favor selecciona a quién va dirigido el certificado");
         return;
       }
-  
-      if (destinoCertificado === "entidad" && !entidadCertificado.trim()) {
+    
+      if (
+        destinoCertificado === "entidad" &&
+        !entidadCertificado.trim()
+      ) {
         alert("Por favor especifica la entidad");
         return;
       }
-
+    
       if (
         destinoCertificado === "entidad" &&
-        entidadCertificado.trim().length > LIMITE_CARACTERES_DIRIGIDO_A
+        entidadCertificado.trim().length >
+          LIMITE_CARACTERES_DIRIGIDO_A
       ) {
-        alert(`El campo dirigido a no puede superar los ${LIMITE_CARACTERES_DIRIGIDO_A} caracteres.`);
+        alert(
+          `El campo dirigido a no puede superar los ${LIMITE_CARACTERES_DIRIGIDO_A} caracteres.`
+        );
         return;
       }
-  
+    
+      const esMiPlan = await validarMiPlanAfiliacionFallecido();
+    
+      if (esMiPlan === null) {
+        return;
+      }
+    
+      if (esMiPlan) {
+        setDocumentoBeneficiario("");
+        setTipoDocumentoBeneficiario("CC");
+        setArchivoAdjuntoAfiliacionFallecido(null);
+        setArchivoAdjuntoAfiliacionFallecidoNombre("");
+    
+        setMostrarModalDestinoCertificado(false);
+        setMostrarModalMiPlanAfiliacionFallecido(true);
+    
+        return;
+      }
+    
       setMostrarModalDestinoCertificado(false);
       setMostrarModalDocumentoFallecido(true);
+    
       return;
     }
   
@@ -2445,26 +2634,222 @@ export default function SolicitudesPage() {
             </Button>
 
             <Button
-              className={`w-full px-8 py-5 font-bold sm:w-auto sm:px-12 sm:py-6 ${
-                enviandoCanalEnvio
-                  ? "bg-gray-300 text-gray-500"
-                  : "bg-[#0090D1] text-white hover:bg-[#007bb3]"
-              }`}
-              onClick={continuarDesdeDestinoCertificado}
-              disabled={enviandoCanalEnvio}
-            >
-              {enviandoCanalEnvio
-                ? "Enviando..."
-                : certificadoSeleccionado === "red-descuentos" &&
-                    personaCertificado === "beneficiario" &&
-                    redDescuentosBeneficiarioMiPlan
-                  ? "Enviar solicitud"
-                  : "Continuar"}
-            </Button>
+                className={`w-full px-8 py-5 font-bold sm:w-auto sm:px-12 sm:py-6 ${
+                  enviandoCanalEnvio || validandoMiPlanAfiliacionFallecido
+                    ? "bg-gray-300 text-gray-500"
+                    : "bg-[#0090D1] text-white hover:bg-[#007bb3]"
+                }`}
+                onClick={continuarDesdeDestinoCertificado}
+                disabled={enviandoCanalEnvio || validandoMiPlanAfiliacionFallecido}
+              >
+                {validandoMiPlanAfiliacionFallecido
+                  ? "Validando plan..."
+                  : enviandoCanalEnvio
+                    ? "Enviando..."
+                    : certificadoSeleccionado === "red-descuentos" &&
+                        personaCertificado === "beneficiario" &&
+                        redDescuentosBeneficiarioMiPlan
+                      ? "Enviar solicitud"
+                      : "Continuar"}
+              </Button>
             </div>
           </div>
         </div>
       )}
+
+{mostrarModalMiPlanAfiliacionFallecido && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4">
+    <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+
+      <div className="flex items-center justify-between border-b border-gray-100 px-6 py-5">
+        <div className="flex items-center gap-4">
+          <div className="flex h-11 w-11 items-center justify-center rounded-full border-2 border-[#002869]">
+            <Info className="h-6 w-6 text-[#002869]" />
+          </div>
+
+          <h3 className="text-xl font-bold text-gray-900">
+            Solicitud Mi Plan
+          </h3>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => {
+            if (!enviandoCanalEnvio) {
+              setMostrarModalMiPlanAfiliacionFallecido(false);
+            }
+          }}
+          className="rounded-full p-2 text-[#002869] transition hover:bg-gray-100"
+          disabled={enviandoCanalEnvio}
+        >
+          <X className="h-7 w-7" />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-5 py-6 sm:px-6 sm:py-8">
+
+        <div className="rounded-xl border border-[#0090D1]/20 bg-[#F5FAFD] px-5 py-4 text-left text-sm text-[#002869]">
+          <div className="flex items-start gap-3">
+            <div className="mt-0.5 flex h-8 w-8 flex-none items-center justify-center rounded-full bg-[#0090D1] text-white">
+              <Info className="h-5 w-5" />
+            </div>
+
+            <div>
+              <p className="font-bold">
+                Esta solicitud requiere validación
+              </p>
+
+              <p className="mt-2 text-gray-700">
+                Ingresa el documento de la persona fallecida y adjunta
+                un documento de soporte. Nuestro equipo revisará
+                la información y validará si corresponde a una
+                persona beneficiaria válida.
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-5">
+
+          <div>
+            <label className="mb-2 block text-sm font-semibold text-gray-700">
+              Tipo de documento del beneficiario
+            </label>
+
+            <select
+              value={tipoDocumentoBeneficiario}
+              onChange={(e) =>
+                setTipoDocumentoBeneficiario(e.target.value)
+              }
+              className="w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-gray-700 outline-none focus:border-[#0090D1]"
+              disabled={enviandoCanalEnvio}
+            >
+              <option value="CC">
+                Cédula de ciudadanía
+              </option>
+
+              <option value="TI">
+                Tarjeta de identidad
+              </option>
+
+              <option value="CE">
+                Cédula de extranjería
+              </option>
+
+              <option value="RC">
+                Registro civil
+              </option>
+
+              <option value="PAS">
+                Pasaporte
+              </option>
+            </select>
+          </div>
+
+          <Input
+            type="text"
+            label="Número de identificación del fallecido"
+            placeholder="Ej: 123456789"
+            value={documentoBeneficiario}
+            onChange={(e) =>
+              setDocumentoBeneficiario(e.target.value)
+            }
+            isRequired
+          />
+
+          <div>
+            <label className="mb-2 block text-sm font-semibold text-gray-700">
+              Documento de soporte
+            </label>
+
+            <input
+              id="archivo-adjunto-afiliacion-fallecido"
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png"
+              className="block w-full rounded-xl border border-gray-300 bg-white px-4 py-3 text-sm text-gray-700"
+              disabled={enviandoCanalEnvio}
+              onChange={(e) => {
+                const archivo = e.target.files?.[0];
+
+                if (!archivo) {
+                  setArchivoAdjuntoAfiliacionFallecido(null);
+                  setArchivoAdjuntoAfiliacionFallecidoNombre("");
+                  return;
+                }
+
+                const validacion = validarArchivoDetallePago(
+                  archivo
+                );
+
+                if (!validacion.valido) {
+                  alert(validacion.mensaje);
+                  e.target.value = "";
+                  setArchivoAdjuntoAfiliacionFallecido(null);
+                  setArchivoAdjuntoAfiliacionFallecidoNombre("");
+                  return;
+                }
+
+                setArchivoAdjuntoAfiliacionFallecido(archivo);
+                setArchivoAdjuntoAfiliacionFallecidoNombre(
+                  archivo.name
+                );
+              }}
+            />
+
+            {archivoAdjuntoAfiliacionFallecidoNombre && (
+              <p className="mt-2 text-sm text-gray-600">
+                Archivo seleccionado:{" "}
+                <span className="font-semibold">
+                  {archivoAdjuntoAfiliacionFallecidoNombre}
+                </span>
+              </p>
+            )}
+
+            <p className="mt-2 text-xs text-gray-500">
+              Formatos permitidos: PDF, JPG o PNG. Máximo 15 MB.
+            </p>
+          </div>
+
+        </div>
+      </div>
+
+      <div className="shrink-0 flex flex-col justify-center gap-3 border-t border-gray-100 bg-white px-5 py-4 sm:flex-row sm:px-6 sm:py-5">
+
+        <Button
+          className={`border border-[#002869] bg-white px-12 py-6 font-bold ${
+            enviandoCanalEnvio
+              ? "text-gray-400"
+              : "text-[#002869]"
+          }`}
+          onClick={() => {
+            if (!enviandoCanalEnvio) {
+              setMostrarModalMiPlanAfiliacionFallecido(false);
+              setMostrarModalDestinoCertificado(true);
+            }
+          }}
+          disabled={enviandoCanalEnvio || validandoMiPlanAfiliacionFallecido}
+        >
+          Regresar
+        </Button>
+
+        <Button
+          className={`w-full px-8 py-5 font-bold sm:w-auto sm:px-12 sm:py-6 ${
+            enviandoCanalEnvio
+              ? "bg-gray-300 text-gray-500"
+              : "bg-[#0090D1] text-white hover:bg-[#007bb3]"
+          }`}
+          onClick={registrarSolicitudMiPlanAfiliacionFallecido}
+          disabled={enviandoCanalEnvio}
+        >
+          {enviandoCanalEnvio
+            ? "Enviando..."
+            : "Enviar solicitud"}
+        </Button>
+
+      </div>
+    </div>
+  </div>
+)}
 
 {mostrarModalDocumentoFallecido && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4">

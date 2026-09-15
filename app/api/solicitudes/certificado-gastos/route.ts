@@ -37,6 +37,37 @@ const PRODUCTOS_EXEQUIALES = new Set([
   1898, 1899, 1900, 1903,
 ]);
 
+const PRODUCTOS_MI_PLAN = new Set([510, 511]);
+
+function contratoEsMiPlan(contrato: ContratoKaring) {
+  const productoPrevision = obtenerNumero(contrato.producto_prevision);
+
+  if (productoPrevision !== null && PRODUCTOS_MI_PLAN.has(productoPrevision)) {
+    return true;
+  }
+
+  const textoProducto = [
+    obtenerTexto(contrato.nombre_producto),
+    obtenerTexto(contrato.descripcion_producto),
+    obtenerTexto(contrato.producto),
+    obtenerTexto(contrato.descripcion_grupal),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toUpperCase();
+
+  return (
+    textoProducto.includes("MI PLAN") ||
+    textoProducto.includes("MI FAMILIA PRIMARIA")
+  );
+}
+
+function obtenerContratosMiPlanVigentes(contratos: ContratoKaring[]) {
+  return contratos.filter((contrato) => {
+    return contratoEstaVigente(contrato) && contratoEsMiPlan(contrato);
+  });
+}
+
 function obtenerTexto(valor: unknown) {
   return typeof valor === "string" && valor.trim() !== "" ? valor.trim() : null;
 }
@@ -960,36 +991,46 @@ export async function POST(request: Request) {
     }
 
     let fallecidoRelacionado: FallecidoSolicitud | null = null;
-
-  if (!esSolicitudEmpresarial) {
-    fallecidoRelacionado = await obtenerFallecidoEnContratos({
-      contratosExequiales,
-      identificacionTitular: String(identificacion).trim(),
-      documentoFallecido: String(cedulaFallecido).trim(),
-    });
-
-    if (!fallecidoRelacionado) {
+    let esSolicitudMiPlanSinFallecido = false;
+    
+    if (!esSolicitudEmpresarial) {
+      fallecidoRelacionado = await obtenerFallecidoEnContratos({
+        contratosExequiales,
+        identificacionTitular: String(identificacion).trim(),
+        documentoFallecido: String(cedulaFallecido).trim(),
+      });
+    
+      if (!fallecidoRelacionado) {
+        const contratosMiPlanVigentes = obtenerContratosMiPlanVigentes(contratosExequiales);
+    
+        esSolicitudMiPlanSinFallecido = contratosMiPlanVigentes.length > 0;
+    
+        if (!esSolicitudMiPlanSinFallecido) {
+          return NextResponse.json(
+            {
+              ok: false,
+              message:
+                "La identificación ingresada no corresponde a un beneficiario fallecido asociado al contrato.",
+            },
+            { status: 422 }
+          );
+        }
+      }
+    }
+    
+    if (modo === "validar-fallecido") {
       return NextResponse.json(
         {
-          ok: false,
-          message:
-            "La identificación ingresada no corresponde a un beneficiario fallecido asociado al contrato.",
+          ok: true,
+          esMiPlan: esSolicitudMiPlanSinFallecido,
+          message: esSolicitudMiPlanSinFallecido
+            ? "No se encontró el fallecido como beneficiario, pero el titular cuenta con Mi Plan. La solicitud puede continuar para validación."
+            : "Fallecido validado correctamente.",
+          fallecido: fallecidoRelacionado,
         },
-        { status: 422 }
+        { status: 200 }
       );
     }
-  }
-
-  if (modo === "validar-fallecido") {
-    return NextResponse.json(
-      {
-        ok: true,
-        message: "Fallecido validado correctamente.",
-        fallecido: fallecidoRelacionado,
-      },
-      { status: 200 }
-    );
-  }
 
   if (!destinoGastos || !String(destinoGastos).trim()) {
     return NextResponse.json(
@@ -1084,7 +1125,11 @@ const fechaFallecimientoSolicitud =
     const datosDoc = JSON.stringify([
       {
         solicitud: "Certificado de gastos servicios funerarios",
-        tipoSolicitud: esSolicitudEmpresarial ? "empresarial" : "normal",
+        tipoSolicitud: esSolicitudEmpresarial
+          ? "empresarial"
+          : esSolicitudMiPlanSinFallecido
+            ? "mi-plan-validacion"
+            : "normal",
         nombre: datosTitular.nombre,
         tipoIdentificacion: datosTitular.tipoIdentificacion,
         identificacion: datosTitular.identificacion,

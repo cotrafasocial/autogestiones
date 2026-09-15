@@ -57,6 +57,25 @@ const PRODUCTOS_EXEQUIALES = new Set([
   1898, 1899, 1900, 1903,
 ]);
 
+const PRODUCTOS_MI_PLAN = new Set([510]);
+
+const TAMANO_MAXIMO_ADJUNTO_MB = 15;
+const TAMANO_MAXIMO_ADJUNTO_BYTES =
+  TAMANO_MAXIMO_ADJUNTO_MB * 1024 * 1024;
+
+const TIPOS_ARCHIVO_PERMITIDOS = new Set([
+  "application/pdf",
+  "image/jpeg",
+  "image/png",
+]);
+
+const EXTENSIONES_ARCHIVO_PERMITIDAS = [
+  ".pdf",
+  ".jpg",
+  ".jpeg",
+  ".png",
+];
+
 function obtenerTexto(valor: unknown) {
   return typeof valor === "string" && valor.trim() !== "" ? valor.trim() : null;
 }
@@ -80,6 +99,32 @@ function contratoEstaVigente(contrato: ContratoKaring) {
     .toUpperCase();
 
   return renovacion !== "C";
+}
+
+function contratoEsMiPlan(contrato: ContratoKaring) {
+  const productoPrevision = obtenerNumero(contrato.producto_prevision);
+
+  if (
+    productoPrevision !== null &&
+    PRODUCTOS_MI_PLAN.has(productoPrevision)
+  ) {
+    return true;
+  }
+
+  const textosProducto = [
+    obtenerTexto(contrato.nombre_producto),
+    obtenerTexto(contrato.descripcion_producto),
+    obtenerTexto(contrato.producto),
+    obtenerTexto(contrato.producto_prevision_nombre),
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toUpperCase();
+
+  return (
+    textosProducto.includes("MI PLAN") ||
+    textosProducto.includes("MI FAMILIA PRIMARIA")
+  );
 }
 
 function contratoEstaCancelado(contrato: ContratoKaring) {
@@ -129,6 +174,17 @@ function obtenerContratosEmpresarialesVigentes(contratos: ContratoKaring[]) {
 function obtenerContratosExequialesVigentes(contratos: ContratoKaring[]) {
   return contratos.filter((contrato) => {
     return contratoEstaVigente(contrato) && contratoEsExequial(contrato);
+  });
+}
+
+function obtenerContratosMiPlanVigentes(
+  contratos: ContratoKaring[]
+) {
+  return contratos.filter((contrato) => {
+    return (
+      contratoEstaVigente(contrato) &&
+      contratoEsMiPlan(contrato)
+    );
   });
 }
 
@@ -1081,6 +1137,41 @@ const titularHistorico = obtenerTitularHistoricoEnFecha(
     };
   }
 
+
+function validarArchivoAdjuntoAfiliacionFallecido(
+    archivo: File
+  ) {
+    const nombreArchivo = archivo.name.toLowerCase();
+  
+    const extensionValida =
+      EXTENSIONES_ARCHIVO_PERMITIDAS.some((extension) =>
+        nombreArchivo.endsWith(extension)
+      );
+  
+    const tipoValido =
+      TIPOS_ARCHIVO_PERMITIDOS.has(archivo.type);
+  
+    if (!extensionValida || !tipoValido) {
+      return {
+        valido: false,
+        mensaje:
+          "Solo se permiten archivos PDF, JPG o PNG.",
+      };
+    }
+  
+    if (archivo.size > TAMANO_MAXIMO_ADJUNTO_BYTES) {
+      return {
+        valido: false,
+        mensaje: `El archivo no puede superar los ${TAMANO_MAXIMO_ADJUNTO_MB} MB.`,
+      };
+    }
+  
+    return {
+      valido: true,
+      mensaje: "",
+    };
+  }
+
 function obtenerFechaActualTexto() {
   return new Date().toLocaleDateString("es-CO", {
     day: "2-digit",
@@ -1677,6 +1768,234 @@ function generarHtmlSolicitudEmpresarialFallecido(datos: {
   `;
 }
 
+async function procesarSolicitudMiPlanAfiliacionFallecido(
+  formData: FormData
+) {
+  const identificacion = String(
+    formData.get("identificacion") || ""
+  ).trim();
+
+  const dirigidoA = String(
+    formData.get("dirigidoA") || ""
+  ).trim();
+
+  const tipoDocumentoBeneficiario = String(
+    formData.get("tipoDocumentoBeneficiario") || ""
+  ).trim();
+
+  const documentoBeneficiario = String(
+    formData.get("documentoBeneficiario") || ""
+  ).trim();
+
+  const archivoAdjunto = formData.get("archivoAdjunto");
+
+  if (!identificacion) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message: "Debe ingresar un número de documento.",
+      },
+      { status: 400 }
+    );
+  }
+
+  if (!dirigidoA) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message: "Debe seleccionar a quién va dirigido el certificado.",
+      },
+      { status: 400 }
+    );
+  }
+
+  if (!tipoDocumentoBeneficiario || !documentoBeneficiario) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          "Debe ingresar el tipo y número de documento del beneficiario.",
+      },
+      { status: 400 }
+    );
+  }
+
+  if (!(archivoAdjunto instanceof File) || archivoAdjunto.size === 0) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          "Debe adjuntar un documento de soporte para esta solicitud.",
+      },
+      { status: 400 }
+    );
+  }
+
+  const validacionArchivo =
+    validarArchivoAdjuntoAfiliacionFallecido(archivoAdjunto);
+
+  if (!validacionArchivo.valido) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message: validacionArchivo.mensaje,
+      },
+      { status: 400 }
+    );
+  }
+
+  const contratos = await consultarContratos(identificacion);
+
+  const contratosMiPlanVigentes =
+    obtenerContratosMiPlanVigentes(contratos);
+
+  if (contratosMiPlanVigentes.length === 0) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          "No fue posible registrar la solicitud porque no se encontró una asistencia Mi Plan vigente.",
+      },
+      { status: 422 }
+    );
+  }
+
+  const datosTitular = obtenerDatosTitular(
+    contratosMiPlanVigentes
+  );
+
+  if (
+    !datosTitular.nombre ||
+    !datosTitular.identificacion ||
+    !datosTitular.tipoIdentificacion
+  ) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          "No fue posible obtener la información del titular para registrar la solicitud.",
+      },
+      { status: 422 }
+    );
+  }
+
+  if (!datosTitular.email) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          "No fue posible registrar la solicitud porque no hay correo registrado.",
+      },
+      { status: 422 }
+    );
+  }
+
+  const codigoSolicitud = generarCodigoAutenticidad();
+
+  const contratosTexto = contratosMiPlanVigentes
+    .map((contrato) => obtenerTexto(contrato.contrato))
+    .filter(Boolean)
+    .join(" / ");
+
+  const archivoBuffer = Buffer.from(
+    await archivoAdjunto.arrayBuffer()
+  );
+
+  const datosDoc = JSON.stringify([
+    {
+      certificado: "Certificado de afiliación del fallecido",
+      tipoSolicitud: "mi-plan-beneficiario-con-adjunto",
+      canal: "correo",
+      dirigidoA,
+      nombre: datosTitular.nombre,
+      tipoIdentificacion: datosTitular.tipoIdentificacion,
+      identificacion: datosTitular.identificacion,
+      emailRegistrado: "SI",
+      personaSolicitud: "beneficiario",
+      tipoDocumentoBeneficiario,
+      documentoBeneficiario,
+      archivoAdjunto: archivoAdjunto.name,
+      contratosMiPlan: contratosMiPlanVigentes.map((contrato) => ({
+        contrato:
+          obtenerTexto(contrato.contrato) || "No disponible",
+        productoPrevision: obtenerNumero(
+          contrato.producto_prevision
+        ),
+        producto:
+          obtenerTexto(contrato.nombre_producto) ||
+          obtenerTexto(contrato.descripcion_producto) ||
+          obtenerTexto(contrato.producto) ||
+          "MI PLAN",
+      })),
+    },
+  ]);
+
+  await registrarSolicitudEnSheets({
+    fechaCreacion: obtenerFechaRegistroTexto(),
+    usuCreacion: identificacion,
+    codigoDoc: codigoSolicitud,
+    tipoDoc: "Certificado de afiliación del fallecido",
+    quienNecesitaDoc: "Beneficiario",
+    dirigidoADoc: dirigidoA,
+    datosDoc,
+  });
+
+  await registrarSolicitudNivel2Certificados({
+    fechaSolicitud: obtenerFechaRegistroTexto(),
+    contrato: contratosTexto,
+    cedula: datosTitular.identificacion || identificacion,
+    nombre: datosTitular.nombre,
+    dirigidoA,
+    correo: datosTitular.email,
+    codigoSolicitud,
+    tipo: "Certificado de afiliación del fallecido",
+    certificado:
+      `Solicitud beneficiario Mi Plan con adjunto ` +
+      `${archivoAdjunto.name} - ${tipoDocumentoBeneficiario} ` +
+      `${documentoBeneficiario}`,
+  });
+
+  await enviarCorreoSolicitudEmpresarial({
+    destinatario: datosTitular.email,
+    nombre: datosTitular.nombre,
+    identificacion:
+      datosTitular.identificacion || identificacion,
+    codigoSolicitud,
+    tipoCertificado:
+      "Certificado de afiliación del fallecido para beneficiario Mi Plan",
+  });
+
+  await enviarCorreoInternoSolicitudMiPlanAfiliacionFallecido({
+    nombreTitular: datosTitular.nombre,
+    identificacionTitular:
+      datosTitular.identificacion || identificacion,
+    correoTitular: datosTitular.email,
+    dirigidoA,
+    tipoDocumentoBeneficiario,
+    documentoBeneficiario,
+    codigoSolicitud,
+    contratos: contratosTexto,
+    archivoNombre: archivoAdjunto.name,
+    archivoBuffer,
+    archivoMimeType:
+      archivoAdjunto.type || "application/octet-stream",
+  });
+
+  return NextResponse.json(
+    {
+      ok: true,
+      estado: "mi-plan-beneficiario-solicitud",
+      message:
+        "Solicitud enviada exitosamente.\n\n" +
+        "Tu solicitud ha sido recibida y será validada por nuestro equipo. " +
+        "La respuesta será enviada al correo electrónico registrado dentro " +
+        "de los próximos tres (3) días hábiles.",
+      codigoSolicitud,
+    },
+    { status: 200 }
+  );
+}
+
 async function enviarCorreoSolicitudEmpresarial(datos: {
   destinatario: string;
   nombre: string;
@@ -1713,6 +2032,119 @@ async function enviarCorreoSolicitudEmpresarial(datos: {
       identificacion: datos.identificacion,
       tipoCertificado: datos.tipoCertificado,
     }),
+  });
+}
+
+async function enviarCorreoInternoSolicitudMiPlanAfiliacionFallecido(
+  datos: {
+    nombreTitular: string;
+    identificacionTitular: string;
+    correoTitular: string;
+    dirigidoA: string;
+    tipoDocumentoBeneficiario: string;
+    documentoBeneficiario: string;
+    codigoSolicitud: string;
+    contratos: string;
+    archivoNombre: string;
+    archivoBuffer: Buffer;
+    archivoMimeType: string;
+  }
+) {
+  const host = process.env.SMTP_HOST;
+  const port = Number(process.env.SMTP_PORT || 465);
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASSWORD;
+  const from = process.env.SMTP_FROM || user;
+
+  if (!host || !user || !pass || !from) {
+    throw new Error(
+      "Faltan variables de entorno para envío de correo."
+    );
+  }
+
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: {
+      user,
+      pass,
+    },
+  });
+
+  await transporter.sendMail({
+    from: `"Cotrafa Social" <${from}>`,
+    to: from,
+    subject:
+      "Solicitud Certificado de afiliación del fallecido - Mi Plan",
+    html: `
+      <p>Cordial saludo,</p>
+
+      <p>
+        Se registró una solicitud de
+        <strong>Certificado de afiliación del fallecido para beneficiario Mi Plan</strong>
+        desde el aplicativo web.
+      </p>
+
+      <p>
+        <strong>Código de solicitud:</strong>
+        ${datos.codigoSolicitud}
+      </p>
+
+      <p>
+        <strong>Nombre titular:</strong>
+        ${datos.nombreTitular}
+      </p>
+
+      <p>
+        <strong>Identificación titular:</strong>
+        ${datos.identificacionTitular}
+      </p>
+
+      <p>
+        <strong>Correo titular:</strong>
+        ${datos.correoTitular}
+      </p>
+
+      <p>
+        <strong>Contrato(s):</strong>
+        ${datos.contratos || "No disponible"}
+      </p>
+
+      <p>
+        <strong>Dirigido a:</strong>
+        ${datos.dirigidoA}
+      </p>
+
+      <p>
+        <strong>Documento beneficiario:</strong>
+        ${datos.tipoDocumentoBeneficiario}
+        ${datos.documentoBeneficiario}
+      </p>
+
+      <p>
+        <strong>Adjunto:</strong>
+        ${datos.archivoNombre}
+      </p>
+
+      <p>
+        El archivo adjunto enviado por el usuario se encuentra
+        anexado a este correo para realizar la validación
+        correspondiente.
+      </p>
+
+      <p>
+        Atentamente,<br />
+        <strong>Cotrafa Social</strong>
+      </p>
+    `,
+    attachments: [
+      {
+        filename: datos.archivoNombre,
+        content: datos.archivoBuffer,
+        contentType: datos.archivoMimeType,
+      },
+    ],
   });
 }
 
@@ -2075,153 +2507,329 @@ async function generarPdfAfiliacionFallecido(datos: {
 
   export async function POST(request: Request) {
     try {
-      const { identificacion, documentoFallecido, dirigidoA, canal } =
-        await request.json();
+      const contentType =
+        request.headers.get("content-type") || "";
   
-      const canalSolicitud = canal === "correo" ? "correo" : "descargar";
+      /*
+       * ============================================================
+       * SOLICITUD MI PLAN CON ADJUNTO
+       * ============================================================
+       */
+      if (
+        contentType
+          .toLowerCase()
+          .startsWith("multipart/form-data")
+      ) {
+        const formData = await request.formData();
   
-      if (!identificacion || !String(identificacion).trim()) {
+        const modo = String(
+          formData.get("modo") || ""
+        ).trim();
+  
+        if (
+          modo ===
+          "solicitud-mi-plan-afiliacion-fallecido"
+        ) {
+          return await procesarSolicitudMiPlanAfiliacionFallecido(
+            formData
+          );
+        }
+  
         return NextResponse.json(
-          { ok: false, message: "Debe ingresar un número de documento." },
+          {
+            ok: false,
+            message: "Tipo de solicitud no soportada.",
+          },
           { status: 400 }
         );
       }
   
-      if (!documentoFallecido || !String(documentoFallecido).trim()) {
+      /*
+       * ============================================================
+       * SOLICITUDES JSON
+       * ============================================================
+       */
+  
+      const body = await request.json();
+  
+      /*
+       * ============================================================
+       * VALIDAR SI ES MI PLAN
+       * ============================================================
+       */
+      if (
+        body?.modo ===
+        "validar-mi-plan-afiliacion-fallecido"
+      ) {
+        const identificacionValidar = String(
+          body.identificacion || ""
+        ).trim();
+  
+        if (!identificacionValidar) {
+          return NextResponse.json(
+            {
+              ok: false,
+              message:
+                "Debe ingresar un número de documento.",
+            },
+            { status: 400 }
+          );
+        }
+  
+        const contratos = await consultarContratos(
+          identificacionValidar
+        );
+  
+        const contratosMiPlanVigentes =
+          obtenerContratosMiPlanVigentes(contratos);
+  
+        return NextResponse.json(
+          {
+            ok: true,
+            esMiPlan:
+              contratosMiPlanVigentes.length > 0,
+          },
+          { status: 200 }
+        );
+      }
+  
+      /*
+       * ============================================================
+       * FLUJO NORMAL ACTUAL
+       * ============================================================
+       */
+  
+      const {
+        identificacion,
+        documentoFallecido,
+        dirigidoA,
+        canal,
+      } = body;
+  
+      const canalSolicitud =
+        canal === "correo" ? "correo" : "descargar";
+  
+      if (
+        !identificacion ||
+        !String(identificacion).trim()
+      ) {
         return NextResponse.json(
           {
             ok: false,
-            message: "Debe ingresar el número de documento del fallecido.",
+            message:
+              "Debe ingresar un número de documento.",
+          },
+          { status: 400 }
+        );
+      }
+  
+      if (
+        !documentoFallecido ||
+        !String(documentoFallecido).trim()
+      ) {
+        return NextResponse.json(
+          {
+            ok: false,
+            message:
+              "Debe ingresar el número de documento del fallecido.",
           },
           { status: 400 }
         );
       }
   
       const dirigidoATexto =
-        typeof dirigidoA === "string" && dirigidoA.trim()
+        typeof dirigidoA === "string" &&
+        dirigidoA.trim()
           ? dirigidoA.trim()
           : "A QUIEN PUEDA INTERESAR";
   
-          const contratos = await consultarContratos(String(identificacion).trim());
-
-          const contratosExequialesVigentes =
-            obtenerContratosExequialesVigentes(contratos);
-
-          const contratosEmpresarialesVigentes =
-            obtenerContratosEmpresarialesVigentes(contratos);
-
-          if (
-            contratosExequialesVigentes.length === 0 &&
-            contratosEmpresarialesVigentes.length > 0
-          ) {
-            const datosTitularEmpresarial = obtenerDatosTitular(
-              contratosEmpresarialesVigentes
-            );
-          
-            if (
-              !datosTitularEmpresarial.nombre ||
-              !datosTitularEmpresarial.identificacion ||
-              !datosTitularEmpresarial.tipoIdentificacion
-            ) {
-              return NextResponse.json(
-                {
-                  ok: false,
-                  message:
-                    "No fue posible obtener la información del titular para registrar la solicitud.",
-                },
-                { status: 422 }
-              );
-            }
-          
-            if (!datosTitularEmpresarial.email) {
-              return NextResponse.json(
-                {
-                  ok: false,
-                  message:
-                    "No fue posible registrar la solicitud porque no hay correo registrado.",
-                },
-                { status: 422 }
-              );
-            }
-          
-            const codigoSolicitud = generarCodigoAutenticidad();
-          
-            const datosDocEmpresarial = JSON.stringify([
-              {
-                certificado: "Certificado de afiliación del fallecido",
-                tipoSolicitud: "empresarial",
-                canal: canalSolicitud,
-                dirigidoA: dirigidoATexto,
-                titular: {
-                  nombre: datosTitularEmpresarial.nombre,
-                  tipoIdentificacion: datosTitularEmpresarial.tipoIdentificacion,
-                  identificacion: datosTitularEmpresarial.identificacion,
-                  emailRegistrado: "SI",
-                },
-                documentoFallecido: String(documentoFallecido).trim(),
-                contratosEmpresariales: contratosEmpresarialesVigentes.map((contrato) => ({
-                  contrato: obtenerTexto(contrato.contrato) || "No disponible",
-                  nitGrupal: obtenerTexto(contrato.nit_grupal) || "No disponible",
-                  producto:
-                    obtenerTexto(contrato.nombre_producto) ||
-                    obtenerTexto(contrato.descripcion_producto) ||
-                    obtenerTexto(contrato.producto) ||
-                    "No disponible",
-                })),
+      const contratos = await consultarContratos(
+        String(identificacion).trim()
+      );
+  
+      /*
+       * IMPORTANTE:
+       * En el flujo normal no hacemos nada diferente.
+       * Mi Plan ya fue interceptado por el modo de validación
+       * anterior desde el frontend.
+       */
+  
+      const contratosExequialesVigentes =
+        obtenerContratosExequialesVigentes(contratos);
+  
+      const contratosEmpresarialesVigentes =
+        obtenerContratosEmpresarialesVigentes(contratos);
+  
+      /*
+       * ============================================================
+       * SOLICITUD EMPRESARIAL
+       * ============================================================
+       */
+  
+      if (
+        contratosExequialesVigentes.length === 0 &&
+        contratosEmpresarialesVigentes.length > 0
+      ) {
+        const datosTitularEmpresarial =
+          obtenerDatosTitular(
+            contratosEmpresarialesVigentes
+          );
+  
+        if (
+          !datosTitularEmpresarial.nombre ||
+          !datosTitularEmpresarial.identificacion ||
+          !datosTitularEmpresarial.tipoIdentificacion
+        ) {
+          return NextResponse.json(
+            {
+              ok: false,
+              message:
+                "No fue posible obtener la información del titular para registrar la solicitud.",
+            },
+            { status: 422 }
+          );
+        }
+  
+        if (!datosTitularEmpresarial.email) {
+          return NextResponse.json(
+            {
+              ok: false,
+              message:
+                "No fue posible registrar la solicitud porque no hay correo registrado.",
+            },
+            { status: 422 }
+          );
+        }
+  
+        const codigoSolicitud =
+          generarCodigoAutenticidad();
+  
+        const datosDocEmpresarial =
+          JSON.stringify([
+            {
+              certificado:
+                "Certificado de afiliación del fallecido",
+              tipoSolicitud: "empresarial",
+              canal: canalSolicitud,
+              dirigidoA: dirigidoATexto,
+              titular: {
+                nombre:
+                  datosTitularEmpresarial.nombre,
+                tipoIdentificacion:
+                  datosTitularEmpresarial.tipoIdentificacion,
+                identificacion:
+                  datosTitularEmpresarial.identificacion,
+                emailRegistrado: "SI",
               },
-            ]);
-          
-            await registrarSolicitudEnSheets({
-              fechaCreacion: obtenerFechaRegistroTexto(),
-              usuCreacion: String(identificacion).trim(),
-              codigoDoc: codigoSolicitud,
-              tipoDoc: "Certificado de afiliación del fallecido",
-              quienNecesitaDoc: "Beneficiario fallecido",
-              dirigidoADoc: dirigidoATexto,
-              datosDoc: datosDocEmpresarial,
-            });
-
-            const contratosTextoNivel2 = contratosEmpresarialesVigentes
-            .map((contrato) => obtenerTexto(contrato.contrato))
+              documentoFallecido:
+                String(documentoFallecido).trim(),
+              contratosEmpresariales:
+                contratosEmpresarialesVigentes.map(
+                  (contrato) => ({
+                    contrato:
+                      obtenerTexto(
+                        contrato.contrato
+                      ) || "No disponible",
+                    nitGrupal:
+                      obtenerTexto(
+                        contrato.nit_grupal
+                      ) || "No disponible",
+                    producto:
+                      obtenerTexto(
+                        contrato.nombre_producto
+                      ) ||
+                      obtenerTexto(
+                        contrato.descripcion_producto
+                      ) ||
+                      obtenerTexto(
+                        contrato.producto
+                      ) ||
+                      "No disponible",
+                  })
+                ),
+            },
+          ]);
+  
+        await registrarSolicitudEnSheets({
+          fechaCreacion:
+            obtenerFechaRegistroTexto(),
+          usuCreacion:
+            String(identificacion).trim(),
+          codigoDoc: codigoSolicitud,
+          tipoDoc:
+            "Certificado de afiliación del fallecido",
+          quienNecesitaDoc:
+            "Beneficiario fallecido",
+          dirigidoADoc: dirigidoATexto,
+          datosDoc: datosDocEmpresarial,
+        });
+  
+        const contratosTextoNivel2 =
+          contratosEmpresarialesVigentes
+            .map((contrato) =>
+              obtenerTexto(contrato.contrato)
+            )
             .filter(Boolean)
             .join(" / ");
-
-          await registrarSolicitudNivel2Certificados({
-            fechaSolicitud: obtenerFechaRegistroTexto(),
-            contrato: contratosTextoNivel2,
-            cedula:
-              datosTitularEmpresarial.identificacion || String(identificacion).trim(),
-            nombre: datosTitularEmpresarial.nombre,
-            dirigidoA: dirigidoATexto,
-            correo: datosTitularEmpresarial.email,
+  
+        await registrarSolicitudNivel2Certificados({
+          fechaSolicitud:
+            obtenerFechaRegistroTexto(),
+          contrato: contratosTextoNivel2,
+          cedula:
+            datosTitularEmpresarial.identificacion ||
+            String(identificacion).trim(),
+          nombre:
+            datosTitularEmpresarial.nombre,
+          dirigidoA: dirigidoATexto,
+          correo:
+            datosTitularEmpresarial.email,
+          codigoSolicitud,
+          tipo:
+            "Certificado de afiliación del fallecido",
+          certificado:
+            `Certificado con fallecido ${String(
+              documentoFallecido
+            ).trim()}`,
+        });
+  
+        await enviarCorreoSolicitudEmpresarial({
+          destinatario:
+            datosTitularEmpresarial.email,
+          nombre:
+            datosTitularEmpresarial.nombre,
+          identificacion:
+            datosTitularEmpresarial.identificacion ||
+            String(identificacion).trim(),
+          codigoSolicitud,
+          tipoCertificado:
+            "Certificado de afiliación del fallecido",
+        });
+  
+        return NextResponse.json(
+          {
+            ok: true,
+            estado: "empresarial",
+            message:
+              "Solicitud enviada exitosamente.\n\n" +
+              "Tu solicitud ha sido recibida y será validada por nuestro equipo. " +
+              "La respuesta será enviada al correo electrónico registrado " +
+              "dentro de los próximos tres (3) días hábiles.",
             codigoSolicitud,
-            tipo: "Certificado de afiliación del fallecido",
-            certificado: `Certificado con fallecido ${String(documentoFallecido).trim()}`,
-          });
-          
-            await enviarCorreoSolicitudEmpresarial({
-              destinatario: datosTitularEmpresarial.email,
-              nombre: datosTitularEmpresarial.nombre,
-              identificacion:
-                datosTitularEmpresarial.identificacion || String(identificacion).trim(),
-              codigoSolicitud,
-              tipoCertificado: "Certificado de afiliación del fallecido",
-            });
-          
-            return NextResponse.json(
-              {
-                ok: true,
-                estado: "empresarial",
-                message:
-                  "Solicitud enviada exitosamente.\n\nTu solicitud ha sido recibida y será validada por nuestro equipo. La respuesta será enviada al correo electrónico registrado dentro de los próximos tres (3) días hábiles.",
-                codigoSolicitud,
-              },
-              { status: 200 }
-            );
-          }
-          
-          
-          if (contratosExequialesVigentes.length === 0) {
+          },
+          { status: 200 }
+        );
+      }
+  
+      /*
+       * ============================================================
+       * SIN CONTRATO EXEQUIAL
+       * ============================================================
+       */
+  
+      if (
+        contratosExequialesVigentes.length === 0
+      ) {
         return NextResponse.json(
           {
             ok: false,
@@ -2232,75 +2840,112 @@ async function generarPdfAfiliacionFallecido(datos: {
         );
       }
   
-      const resultadoPlanes = await obtenerPlanesExequialesAlDia(
-        contratos.filter((contrato) => contratoEsExequial(contrato)),
-        String(identificacion).trim()
-      );
+      /*
+       * ============================================================
+       * VALIDACIÓN DE CARTERA
+       * ============================================================
+       */
+  
+      const resultadoPlanes =
+        await obtenerPlanesExequialesAlDia(
+          contratos.filter((contrato) =>
+            contratoEsExequial(contrato)
+          ),
+          String(identificacion).trim()
+        );
   
       if (!resultadoPlanes.estaAlDia) {
-        const datosTitularMoroso = obtenerDatosTitular(contratosExequialesVigentes);
-      
-        const contratosMorososTexto = resultadoPlanes.contratosMorosos
-          .map((contrato) => contrato.contrato)
-          .filter(Boolean)
-          .join(" / ");
-      
-        const productosMorososTexto = resultadoPlanes.contratosMorosos
-          .map((contrato) => contrato.producto)
-          .filter(Boolean)
-          .join(" / ");
-      
-        const datosDocMoroso = JSON.stringify([
-          {
-            certificado: "Certificado de afiliación del fallecido",
-            estado: "moroso",
-            motivo:
-              "No fue posible generar el certificado automáticamente porque el titular presenta cartera pendiente.",
-            canal: canalSolicitud,
-            dirigidoA: dirigidoATexto,
-            titular: {
-              nombre: datosTitularMoroso.nombre || "Afiliado",
-              identificacion:
-                datosTitularMoroso.identificacion || String(identificacion).trim(),
-              emailRegistrado: datosTitularMoroso.email ? "SI" : "NO",
+        const datosTitularMoroso =
+          obtenerDatosTitular(
+            contratosExequialesVigentes
+          );
+  
+        const contratosMorososTexto =
+          resultadoPlanes.contratosMorosos
+            .map((contrato) => contrato.contrato)
+            .filter(Boolean)
+            .join(" / ");
+  
+        const productosMorososTexto =
+          resultadoPlanes.contratosMorosos
+            .map((contrato) => contrato.producto)
+            .filter(Boolean)
+            .join(" / ");
+  
+        const datosDocMoroso =
+          JSON.stringify([
+            {
+              certificado:
+                "Certificado de afiliación del fallecido",
+              estado: "moroso",
+              motivo:
+                "No fue posible generar el certificado automáticamente porque el titular presenta cartera pendiente.",
+              canal: canalSolicitud,
+              dirigidoA: dirigidoATexto,
+              titular: {
+                nombre:
+                  datosTitularMoroso.nombre ||
+                  "Afiliado",
+                identificacion:
+                  datosTitularMoroso.identificacion ||
+                  String(identificacion).trim(),
+                emailRegistrado:
+                  datosTitularMoroso.email
+                    ? "SI"
+                    : "NO",
+              },
+              documentoFallecido:
+                String(documentoFallecido).trim(),
+              contratosMorosos:
+                resultadoPlanes.contratosMorosos,
+              contratos: contratosMorososTexto,
+              productos: productosMorososTexto,
             },
-            documentoFallecido: String(documentoFallecido).trim(),
-            contratosMorosos: resultadoPlanes.contratosMorosos,
-            contratos: contratosMorososTexto,
-            productos: productosMorososTexto,
-          },
-        ]);
-      
+          ]);
+  
         await registrarSolicitudEnSheets({
-          fechaCreacion: obtenerFechaRegistroTexto(),
-          usuCreacion: String(identificacion).trim(),
+          fechaCreacion:
+            obtenerFechaRegistroTexto(),
+          usuCreacion:
+            String(identificacion).trim(),
           codigoDoc: "NO GENERADO POR MORA",
-          tipoDoc: "Certificado de afiliación del fallecido",
-          quienNecesitaDoc: "Beneficiario fallecido",
+          tipoDoc:
+            "Certificado de afiliación del fallecido",
+          quienNecesitaDoc:
+            "Beneficiario fallecido",
           dirigidoADoc: dirigidoATexto,
           datosDoc: datosDocMoroso,
         });
-      
-        if (canalSolicitud === "correo" && datosTitularMoroso.email) {
+  
+        if (
+          canalSolicitud === "correo" &&
+          datosTitularMoroso.email
+        ) {
           await enviarCorreoContratosMorosos({
-            destinatario: datosTitularMoroso.email,
-            nombre: datosTitularMoroso.nombre || "Afiliado",
+            destinatario:
+              datosTitularMoroso.email,
+            nombre:
+              datosTitularMoroso.nombre ||
+              "Afiliado",
             identificacion:
-              datosTitularMoroso.identificacion || String(identificacion).trim(),
-            contratosMorosos: resultadoPlanes.contratosMorosos,
+              datosTitularMoroso.identificacion ||
+              String(identificacion).trim(),
+            contratosMorosos:
+              resultadoPlanes.contratosMorosos,
           });
-      
+  
           return NextResponse.json(
             {
               ok: true,
               estado: "moroso",
               message:
-                "Tu solicitud fue recibida\nHemos enviado información detallada al correo electrónico registrado.",
+                "Tu solicitud fue recibida\n" +
+                "Hemos enviado información detallada al correo electrónico registrado.",
             },
             { status: 200 }
           );
         }
-      
+  
         return NextResponse.json(
           {
             ok: false,
@@ -2312,7 +2957,16 @@ async function generarPdfAfiliacionFallecido(datos: {
         );
       }
   
-      const datosTitular = obtenerDatosTitular(contratosExequialesVigentes);
+      /*
+       * ============================================================
+       * DATOS TITULAR
+       * ============================================================
+       */
+  
+      const datosTitular =
+        obtenerDatosTitular(
+          contratosExequialesVigentes
+        );
   
       if (
         !datosTitular.nombre ||
@@ -2330,11 +2984,21 @@ async function generarPdfAfiliacionFallecido(datos: {
         );
       }
   
-      const resultadoFallecido = await obtenerFallecidoEnContratos({
-        contratosExequiales: contratosExequialesVigentes,
-        identificacionTitular: String(identificacion).trim(),
-        documentoFallecido: String(documentoFallecido).trim(),
-      });
+      /*
+       * ============================================================
+       * BUSCAR FALLECIDO
+       * ============================================================
+       */
+  
+      const resultadoFallecido =
+        await obtenerFallecidoEnContratos({
+          contratosExequiales:
+            contratosExequialesVigentes,
+          identificacionTitular:
+            String(identificacion).trim(),
+          documentoFallecido:
+            String(documentoFallecido).trim(),
+        });
   
       if (!resultadoFallecido) {
         return NextResponse.json(
@@ -2347,30 +3011,48 @@ async function generarPdfAfiliacionFallecido(datos: {
         );
       }
   
-      const codigoAutenticidad = generarCodigoAutenticidad();
+      /*
+       * ============================================================
+       * GENERAR CERTIFICADO NORMAL
+       * ============================================================
+       */
+  
+      const codigoAutenticidad =
+        generarCodigoAutenticidad();
   
       const datosDoc = JSON.stringify([
         {
-          certificado: "Certificado de afiliación del fallecido",
+          certificado:
+            "Certificado de afiliación del fallecido",
           canal: canalSolicitud,
           dirigidoA: dirigidoATexto,
           titular: {
             nombre: datosTitular.nombre,
-            tipoIdentificacion: datosTitular.tipoIdentificacion,
-            identificacion: datosTitular.identificacion,
-            emailRegistrado: datosTitular.email ? "SI" : "NO",
+            tipoIdentificacion:
+              datosTitular.tipoIdentificacion,
+            identificacion:
+              datosTitular.identificacion,
+            emailRegistrado:
+              datosTitular.email ? "SI" : "NO",
           },
-          fallecido: resultadoFallecido.fallecido,
-          contrato: resultadoFallecido.contrato,
-          producto: resultadoFallecido.producto,
+          fallecido:
+            resultadoFallecido.fallecido,
+          contrato:
+            resultadoFallecido.contrato,
+          producto:
+            resultadoFallecido.producto,
         },
       ]);
   
-      const cantidadSolicitudesHoy = await contarSolicitudesAfiliacionFallecidoHoy(
-        String(identificacion).trim()
-      );
+      const cantidadSolicitudesHoy =
+        await contarSolicitudesAfiliacionFallecidoHoy(
+          String(identificacion).trim()
+        );
   
-      if (cantidadSolicitudesHoy >= LIMITE_DIARIO_AFILIACION_FALLECIDO) {
+      if (
+        cantidadSolicitudesHoy >=
+        LIMITE_DIARIO_AFILIACION_FALLECIDO
+      ) {
         return NextResponse.json(
           {
             ok: false,
@@ -2382,36 +3064,58 @@ async function generarPdfAfiliacionFallecido(datos: {
       }
   
       await registrarSolicitudEnSheets({
-        fechaCreacion: obtenerFechaRegistroTexto(),
-        usuCreacion: String(identificacion).trim(),
+        fechaCreacion:
+          obtenerFechaRegistroTexto(),
+        usuCreacion:
+          String(identificacion).trim(),
         codigoDoc: codigoAutenticidad,
-        tipoDoc: "Certificado de afiliación del fallecido",
-        quienNecesitaDoc: "Beneficiario fallecido",
+        tipoDoc:
+          "Certificado de afiliación del fallecido",
+        quienNecesitaDoc:
+          "Beneficiario fallecido",
         dirigidoADoc: dirigidoATexto,
         datosDoc,
       });
   
-      const pdfBytes = await generarPdfAfiliacionFallecido({
-        nombreFallecido: resultadoFallecido.fallecido.nombreCompleto,
-        tipoIdentificacionFallecido:
-          resultadoFallecido.fallecido.tipoIdentificacion,
-        identificacionFallecido: resultadoFallecido.fallecido.identificacion,
-        nombreTitular:
-        resultadoFallecido.fallecido.titularHistoricoNombre || datosTitular.nombre,
-      tipoIdentificacionTitular:
-        resultadoFallecido.fallecido.titularHistoricoTipoIdentificacion ||
-        datosTitular.tipoIdentificacion,
-      identificacionTitular:
-        resultadoFallecido.fallecido.titularHistoricoIdentificacion ||
-        datosTitular.identificacion,
-        contrato: resultadoFallecido.contrato,
-        producto: resultadoFallecido.producto,
-        fechaIngresoPlan: resultadoFallecido.fallecido.fechaAfiliacion,
-        fechaFallecimiento: resultadoFallecido.fallecido.fechaFallecimiento,
-        dirigidoA: dirigidoATexto,
-        codigoAutenticidad,
-        esTitularFallecido: resultadoFallecido.fallecido.esTitularFallecido,
-      });
+      const pdfBytes =
+        await generarPdfAfiliacionFallecido({
+          nombreFallecido:
+            resultadoFallecido.fallecido
+              .nombreCompleto,
+          tipoIdentificacionFallecido:
+            resultadoFallecido.fallecido
+              .tipoIdentificacion,
+          identificacionFallecido:
+            resultadoFallecido.fallecido
+              .identificacion,
+          nombreTitular:
+            resultadoFallecido.fallecido
+              .titularHistoricoNombre ||
+            datosTitular.nombre,
+          tipoIdentificacionTitular:
+            resultadoFallecido.fallecido
+              .titularHistoricoTipoIdentificacion ||
+            datosTitular.tipoIdentificacion,
+          identificacionTitular:
+            resultadoFallecido.fallecido
+              .titularHistoricoIdentificacion ||
+            datosTitular.identificacion,
+          contrato:
+            resultadoFallecido.contrato,
+          producto:
+            resultadoFallecido.producto,
+          fechaIngresoPlan:
+            resultadoFallecido.fallecido
+              .fechaAfiliacion,
+          fechaFallecimiento:
+            resultadoFallecido.fallecido
+              .fechaFallecimiento,
+          dirigidoA: dirigidoATexto,
+          codigoAutenticidad,
+          esTitularFallecido:
+            resultadoFallecido.fallecido
+              .esTitularFallecido,
+        });
   
       if (canalSolicitud === "correo") {
         if (!datosTitular.email) {
@@ -2426,11 +3130,15 @@ async function generarPdfAfiliacionFallecido(datos: {
         }
   
         await enviarCertificadoPorCorreo({
-          destinatario: datosTitular.email,
+          destinatario:
+            datosTitular.email,
           pdfBytes,
           codigoAutenticidad,
-          nombreAfiliado: datosTitular.nombre || "Afiliado",
-          nombreCertificado: "Afiliación del Fallecido",
+          nombreAfiliado:
+            datosTitular.nombre ||
+            "Afiliado",
+          nombreCertificado:
+            "Afiliación del Fallecido",
         });
   
         return NextResponse.json(
@@ -2444,27 +3152,38 @@ async function generarPdfAfiliacionFallecido(datos: {
         );
       }
   
-      const pdfArrayBuffer = pdfBytes.buffer.slice(
-        pdfBytes.byteOffset,
-        pdfBytes.byteOffset + pdfBytes.byteLength
-      ) as ArrayBuffer;
+      const pdfArrayBuffer =
+        pdfBytes.buffer.slice(
+          pdfBytes.byteOffset,
+          pdfBytes.byteOffset +
+            pdfBytes.byteLength
+        ) as ArrayBuffer;
   
-      return new NextResponse(pdfArrayBuffer, {
-        status: 200,
-        headers: {
-          "Content-Type": "application/pdf",
-          "Content-Disposition":
-            'attachment; filename="certificado-afiliacion-fallecido.pdf"',
-          "Cache-Control": "no-store",
-        },
-      });
+      return new NextResponse(
+        pdfArrayBuffer,
+        {
+          status: 200,
+          headers: {
+            "Content-Type":
+              "application/pdf",
+            "Content-Disposition":
+              'attachment; filename="certificado-afiliacion-fallecido.pdf"',
+            "Cache-Control":
+              "no-store",
+          },
+        }
+      );
     } catch (error) {
-      console.error("Error generando certificado afiliación fallecido:", error);
+      console.error(
+        "Error generando certificado afiliación fallecido:",
+        error
+      );
   
       return NextResponse.json(
         {
           ok: false,
-          message: "No fue posible generar el certificado en este momento.",
+          message:
+            "No fue posible generar el certificado en este momento.",
         },
         { status: 500 }
       );
