@@ -140,6 +140,8 @@ export default function SolicitudesPage() {
 
   const ENTIDADES_RED_DESCUENTOS = [
     "ELITE MAX",
+    "ACTION BLACK",
+    "INGRILL",
     "AUTOESTIMA",
     "Clínica veterinaria CISVET",
     "GAS Y HOGAR",
