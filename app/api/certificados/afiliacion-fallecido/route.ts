@@ -568,6 +568,43 @@ function obtenerNombreProductoDesdeDetalle(detalleContrato: unknown) {
     return fecha.getTime();
   }
   
+  function personaEstabaActivaEnFecha(
+    persona: Record<string, unknown>,
+    fechaReferenciaTexto: string | null
+  ) {
+    const fechaReferencia = obtenerFechaLocalSinDesfase(fechaReferenciaTexto);
+  
+    if (!fechaReferencia || isNaN(fechaReferencia.getTime())) {
+      return false;
+    }
+  
+    const fechaAfiliacion = obtenerFechaLocalSinDesfase(
+      obtenerTexto(persona.fecha_afiliacion)
+    );
+  
+    if (!fechaAfiliacion || isNaN(fechaAfiliacion.getTime())) {
+      return false;
+    }
+  
+    if (fechaAfiliacion > fechaReferencia) {
+      return false;
+    }
+  
+    const fechaRetiro = obtenerFechaLocalSinDesfase(
+      obtenerTexto(persona.fecha_retiro)
+    );
+  
+    if (
+      fechaRetiro &&
+      !isNaN(fechaRetiro.getTime()) &&
+      fechaRetiro < fechaReferencia
+    ) {
+      return false;
+    }
+  
+    return true;
+  }
+  
   function obtenerRegistroFallecidoPreferido(
     coincidencias: unknown[],
     identificacionTitularActual: string
@@ -582,6 +619,21 @@ function obtenerNombreProductoDesdeDetalle(detalleContrato: unknown) {
       })
       .map((registro) => registro as Record<string, unknown>)
       .sort((a, b) => {
+        const aFechaFallecio = obtenerTexto(a.fecha_fallecio);
+        const bFechaFallecio = obtenerTexto(b.fecha_fallecio);
+  
+        const aActivoAlFallecer = personaEstabaActivaEnFecha(a, aFechaFallecio)
+          ? 1
+          : 0;
+  
+        const bActivoAlFallecer = personaEstabaActivaEnFecha(b, bFechaFallecio)
+          ? 1
+          : 0;
+  
+        if (bActivoAlFallecer !== aActivoAlFallecer) {
+          return bActivoAlFallecer - aActivoAlFallecer;
+        }
+  
         const aEsTitular = personaEsTitularHistorico(
           a,
           identificacionTitularActual
@@ -608,7 +660,7 @@ function obtenerNombreProductoDesdeDetalle(detalleContrato: unknown) {
   
     return registros[0] || null;
   }
-
+  
   function obtenerTitularHistoricoEnFecha(
     asegurados: unknown[],
     fechaFallecimiento: string,
