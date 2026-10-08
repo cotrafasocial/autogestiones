@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import crypto from "crypto";
 import nodemailer from "nodemailer";
 import { google } from "googleapis";
+import path from "path";
+import fs from "fs";
+import PDFDocument from "pdfkit";
+import QRCode from "qrcode";
+
 
 
 export const runtime = "nodejs";
@@ -25,6 +30,314 @@ type FallecidoSolicitud = {
   identificacion: string;
   fechaFallecimiento: string;
 };
+
+const CORREO_INTERNO_GASTOS_FISICO =
+  process.env.CORREO_INTERNO_GASTOS_FISICO || "analistati@cotrafasocial.com.co";
+
+
+type OrdenServicioKaring = Record<string, unknown>;
+
+type ServicioOrden = {
+  categoria: string;
+  nombre: string;
+  valorUnitario: number;
+  cantidad: number;
+  basico: number;
+  excedente: number;
+};
+
+function escaparHtml(valor: string | null | undefined) {
+  return String(valor || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
+
+function formatearMoneda(valor: unknown) {
+  const numero = obtenerNumero(valor) || 0;
+
+  return numero.toLocaleString("es-CO", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
+function formatearFechaLarga(fechaTexto: string | null) {
+  if (!fechaTexto) {
+    return "";
+  }
+
+  const fechaLimpia = fechaTexto.trim();
+  const coincidenciaIso = fechaLimpia.match(/^(\d{4})-(\d{2})-(\d{2})/);
+
+  if (!coincidenciaIso) {
+    return "";
+  }
+
+  const [, anio, mes, dia] = coincidenciaIso;
+  const fecha = new Date(Number(anio), Number(mes) - 1, Number(dia));
+
+  return fecha.toLocaleDateString("es-CO", {
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
+
+function obtenerNombreServicio(codigoServicio: string | null) {
+  const servicios: Record<string, string> = {
+    "1": "DESTINO FINAL DEL CUERPO INHUMACIÓN",
+    "2": "DESTINO FINAL DEL CUERPO CREMACIÓN",
+    "3": "SALA DE VELACIÓN COTRAFA SOCIAL",
+    "4": "SALA DE VELACIÓN TERCEROS",
+    "5": "SALA DE VELACIÓN HORAS EXTRAS COTRAFA SOCIAL",
+    "6": "SALA DE VELACIÓN HORAS EXTRAS TERCEROS",
+    "7": "AVISOS MURALES (CARTELES)",
+    "8": "VELONES",
+    "9": "CONTENEDOR PARA CREMACIÓN",
+    "12": "TRASLADOS RURALES",
+    "13": "PREPARACIÓN DEL CUERPO (TANATOPRAXIA)",
+    "14": "TRÁMITES LEGALES",
+    "15": "SUMINISTRO DE CARROZA FÚNEBRE",
+    "16": "RECORDATORIOS - CINTA",
+    "17": "CORTEJO FÚNEBRE",
+    "18": "SERVICIOS BÁSICOS FUNERARIOS",
+    "19": "TRÁMITES ECLESIÁSTICOS EXEQUIAS",
+    "20": "ACOMPAÑAMIENTO MUSICAL",
+    "21": "TRANSPORTE ACOMPAÑANTES (BUSES)",
+    "22": "VEHÍCULOS ADICIONALES",
+    "23": "TRASLADO DEL CUERPO (URBANO)",
+    "24": "TRASLADO DEL CUERPO (NACIONAL)",
+    "25": "ARREGLOS FLORALES (BÁSICO)",
+    "26": "ARREGLOS FLORALES (ESPECIAL)",
+    "27": "ARREGLO FLORAL (YUGO)",
+    "28": "YUGO ARTIFICIAL",
+    "29": "SERVICIOS HUELLAS DE VIDA",
+    "34": "CREMACIÓN DE RESTOS",
+    "74": "COFRE FÚNEBRE EN ARRIENDO",
+    "75": "COFRE FÚNEBRE EN VENTA",
+    "76": "URNAS",
+    "77": "HÁBITOS",
+    "78": "SERVICIOS FUNERARIOS DE TERCEROS",
+    "79": "CENIZARIO Y OSARIO",
+    "80": "RECONOCIMIENTOS",
+    "81": "COFRE TERCEROS",
+    "82": "INICIALES TERCEROS",
+    "83": "URNA TERCEROS",
+    "84": "AUTORIZACIONES",
+    "85": "CUSTODIA COTRAFA SOCIAL",
+    "86": "CUSTODIA TERCEROS",
+    "87": "SERVICIO FUNERARIO MASCOTA",
+    "88": "INHUMACIÓN HORA EXTRA",
+    "89": "REPATRIACIÓN Y/O EXPATRIACIÓN",
+    "90": "URNA PARA MASCOTAS",
+    "91": "CREMACIÓN MASCOTAS",
+    "92": "BOLSA CENIZA",
+    "93": "INICIALES TERCEROS MASCOTAS",
+    "94": "VELAS PARA MASCOTAS",
+    "999": "SERVICIOS FUNERARIOS",
+  };
+
+  if (!codigoServicio) {
+    return "SERVICIO FUNERARIO";
+  }
+
+  return servicios[codigoServicio] || `SERVICIO ${codigoServicio}`;
+}
+
+function obtenerCategoriaServicio(codigoServicio: string | null) {
+  const codigo = String(codigoServicio || "").trim();
+
+  const codigosDestinoFinal = new Set([
+    "1",
+    "2",
+    "34",
+    "79",
+    "88",
+    "91",
+  ]);
+
+  const codigosComplementarios = new Set([
+    "7",
+    "8",
+    "9",
+    "12",
+    "16",
+    "19",
+    "20",
+    "21",
+    "22",
+    "24",
+    "25",
+    "26",
+    "27",
+    "28",
+    "29",
+    "74",
+    "75",
+    "76",
+    "77",
+    "78",
+    "80",
+    "81",
+    "82",
+    "83",
+    "84",
+    "85",
+    "86",
+    "87",
+    "89",
+    "90",
+    "92",
+    "93",
+    "94",
+  ]);
+
+  if (codigosDestinoFinal.has(codigo)) {
+    return "DESTINO FINAL";
+  }
+
+  if (codigosComplementarios.has(codigo)) {
+    return "SERVICIOS COMPLEMENTARIOS";
+  }
+
+  return "SERVICIOS BÁSICOS";
+}
+
+function extraerPrimerFallecidoOrden(datosOrden: OrdenServicioKaring) {
+  const fallecidos = datosOrden.fallecidos;
+
+  if (!Array.isArray(fallecidos) || fallecidos.length === 0) {
+    return null;
+  }
+
+  const fallecido = fallecidos[0];
+
+  if (
+    !fallecido ||
+    typeof fallecido !== "object" ||
+    Array.isArray(fallecido)
+  ) {
+    return null;
+  }
+
+  return fallecido as Record<string, unknown>;
+}
+
+function extraerServiciosOrden(datosOrden: OrdenServicioKaring): ServicioOrden[] {
+  const detalle = datosOrden.detalle;
+
+  if (!Array.isArray(detalle)) {
+    return [];
+  }
+
+  return detalle
+    .filter((item) => item && typeof item === "object" && !Array.isArray(item))
+    .map((item) => {
+      const servicio = item as Record<string, unknown>;
+      const codigoServicio = obtenerTexto(servicio.servicio);
+      const cantidad = obtenerNumero(servicio.cantidad) || 0;
+      const basico = obtenerNumero(servicio.valor_convenio) || 0;
+      const excedente = obtenerNumero(servicio.valor_excedente) || 0;
+      const valorUnitario = cantidad > 0 ? basico / cantidad : basico;
+
+      return {
+        categoria: obtenerCategoriaServicio(codigoServicio),
+        nombre: obtenerNombreServicio(codigoServicio),
+        valorUnitario,
+        cantidad,
+        basico,
+        excedente,
+      };
+    })
+    .filter((servicio) => {
+      return servicio.basico > 0 || servicio.excedente > 0 || servicio.cantidad > 0;
+    });
+}
+
+async function buscarOrdenServicioPorCedulaFallecido(cedulaFallecido: string) {
+  const spreadsheetId = process.env.GOOGLE_SHEET_SERVICIOS_AUTO_ID;
+
+  if (!spreadsheetId) {
+    throw new Error("Falta GOOGLE_SHEET_SERVICIOS_AUTO_ID.");
+  }
+
+  const auth = obtenerClienteGoogleSheets();
+
+  const sheets = google.sheets({
+    version: "v4",
+    auth,
+  });
+
+  const respuesta = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: "'Servicios'!C:D",
+  });
+
+  const filas = respuesta.data.values || [];
+  const documentoBuscado = normalizarDocumento(cedulaFallecido);
+
+  for (const fila of filas) {
+    const ordenServicio = String(fila[0] || "").trim();
+    const documentoFallecido = normalizarDocumento(String(fila[1] || ""));
+
+    if (!ordenServicio || !documentoFallecido) {
+      continue;
+    }
+
+    if (documentoFallecido === documentoBuscado) {
+      return ordenServicio;
+    }
+  }
+
+  return null;
+}
+
+async function consultarOrdenServicioKaring(ordenServicio: string) {
+  const ordenServicioUrl = process.env.KARING_ORDEN_SERVICIO_URL;
+
+  if (!ordenServicioUrl) {
+    throw new Error("Falta KARING_ORDEN_SERVICIO_URL.");
+  }
+
+  const token = await obtenerToken();
+
+  const urlConsulta = new URL(ordenServicioUrl);
+  urlConsulta.searchParams.set("_orden_servicio", ordenServicio);
+
+  const response = await fetch(urlConsulta.toString(), {
+    method: "GET",
+    headers: {
+      "Authorization-Token": token,
+      "Content-Type": "application/json",
+      "Accept-Encoding": "identity",
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error("No fue posible consultar la orden de servicio.");
+  }
+
+  const textoRespuesta = await response.text();
+
+  try {
+    return JSON.parse(textoRespuesta) as OrdenServicioKaring;
+  } catch {
+    throw new Error("La respuesta de la orden de servicio no tiene formato JSON válido.");
+  }
+}
+
+function generarCodigoAutenticidadGastos() {
+  const fecha = new Date();
+  const anio = fecha.getFullYear();
+  const mes = String(fecha.getMonth() + 1).padStart(2, "0");
+  const dia = String(fecha.getDate()).padStart(2, "0");
+  const uuid = crypto.randomUUID().replaceAll("-", "").toUpperCase();
+
+  return `CS-${anio}${mes}${dia}-${uuid.slice(0, 6)}-${uuid.slice(6, 12)}-${uuid.slice(12, 18)}`;
+}
 
 
 
@@ -678,6 +991,440 @@ async function registrarSolicitudNivel2CertificadoGastos(datos: {
   });
 }
 
+async function generarPdfCertificadoGastosAutomatico(datos: {
+  dirigidoA: string;
+  codigoAutenticidad: string;
+  ordenServicio: string;
+  nombreTitular: string;
+  identificacionTitular: string;
+  contrato: string;
+  nombreFallecido: string;
+  identificacionFallecido: string;
+  fechaFallecimiento: string;
+  fechaServicio: string;
+  servicios: ServicioOrden[];
+}) {
+  const logoPath = path.join(
+    process.cwd(),
+    "public",
+    "certificados",
+    "LOGO.png"
+  );
+
+  const piePaginaPath = path.join(
+    process.cwd(),
+    "public",
+    "certificados",
+    "PIEPAG.jpg"
+  );
+
+  const urlBaseValidacion =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    "https://test-autosolicitudes.cotrafasocial.com";
+
+  const urlValidacion = `${urlBaseValidacion}/validar-documento?codigo=${encodeURIComponent(
+    datos.codigoAutenticidad
+  )}`;
+
+  const qrDataUrl = await QRCode.toDataURL(urlValidacion, {
+    errorCorrectionLevel: "H",
+    margin: 1,
+    width: 120,
+  });
+
+  const qrBase64 = qrDataUrl.replace(/^data:image\/png;base64,/, "");
+  const qrBuffer = Buffer.from(qrBase64, "base64");
+
+  const doc = new PDFDocument({
+    size: "LETTER",
+    margin: 36,
+    bufferPages: true,
+  });
+
+  const chunks: Uint8Array[] = [];
+
+  doc.on("data", (chunk: Uint8Array) => {
+    chunks.push(chunk);
+  });
+
+  const pdfFinalizado = new Promise<Buffer>((resolve, reject) => {
+    doc.on("end", () => resolve(Buffer.concat(chunks)));
+    doc.on("error", reject);
+  });
+
+  const anchoPagina = doc.page.width;
+  const margen = 36;
+  const anchoContenido = anchoPagina - margen * 2;
+
+  function dibujarEncabezado() {
+    if (fs.existsSync(logoPath)) {
+      doc.image(logoPath, margen, 32, { width: 88 });
+    }
+
+    doc
+      .moveTo(margen, 145)
+      .lineTo(anchoPagina - margen, 145)
+      .lineWidth(2)
+      .strokeColor("#002869")
+      .stroke();
+
+    doc
+      .moveTo(margen, 154)
+      .lineTo(anchoPagina - margen, 154)
+      .lineWidth(1)
+      .strokeColor("#f5a623")
+      .stroke();
+
+    doc.strokeColor("#000000");
+  }
+
+  function dibujarPiePagina() {
+    const yBase = doc.page.height - 92;
+
+    doc
+      .fontSize(6.5)
+      .fillColor("#555555")
+      .text(
+        "De conformidad con la Ley Estatutaria 1581 de 2012 de Protección de Datos Personales, la información aquí contenida es confidencial y ha sido emitida con la autorización expresa del titular para fines estrictamente institucionales y de validación ante terceros.",
+        margen,
+        yBase,
+        {
+          width: anchoContenido,
+          align: "center",
+        }
+      );
+
+    doc
+      .moveTo(margen, yBase + 22)
+      .lineTo(anchoPagina - margen, yBase + 22)
+      .lineWidth(2)
+      .strokeColor("#002869")
+      .stroke();
+
+    doc
+      .moveTo(margen, yBase + 32)
+      .lineTo(anchoPagina - margen, yBase + 32)
+      .lineWidth(1)
+      .strokeColor("#f5a623")
+      .stroke();
+
+    if (fs.existsSync(piePaginaPath)) {
+      doc.image(piePaginaPath, margen + 95, yBase + 42, {
+        width: anchoContenido - 190,
+      });
+    }
+
+    doc.strokeColor("#000000").fillColor("#000000");
+  }
+
+  function verificarEspacio(altoNecesario: number) {
+    if (doc.y + altoNecesario > doc.page.height - 125) {
+      dibujarPiePagina();
+      doc.addPage();
+      dibujarEncabezado();
+      doc.y = 178;
+    }
+  }
+
+  function dibujarTabla(categoria: string, servicios: ServicioOrden[]) {
+    if (servicios.length === 0) {
+      return;
+    }
+  
+    const x = margen;
+    const widths = [220, 75, 60, 85, 100];
+    const altoEncabezado = 18;
+    const altoFila = 17;
+  
+    function dibujarEncabezadoTabla() {
+      verificarEspacio(altoEncabezado + altoFila);
+  
+      const y = doc.y + 10;
+  
+      doc.font("Helvetica-Bold").fontSize(6.7).fillColor("#333333");
+  
+      doc.rect(x, y, anchoContenido, altoEncabezado).fillAndStroke("#eeeeee", "#333333");
+  
+      doc.fillColor("#333333");
+      doc.text(categoria, x + 6, y + 6, { width: widths[0] - 12 });
+      doc.text("VR. UNITARIO", x + widths[0], y + 6, {
+        width: widths[1],
+        align: "center",
+      });
+      doc.text("CANTIDAD", x + widths[0] + widths[1], y + 6, {
+        width: widths[2],
+        align: "center",
+      });
+      doc.text("BÁSICO", x + widths[0] + widths[1] + widths[2], y + 6, {
+        width: widths[3],
+        align: "center",
+      });
+      doc.text(
+        "EXCEDENTE",
+        x + widths[0] + widths[1] + widths[2] + widths[3],
+        y + 6,
+        {
+          width: widths[4],
+          align: "center",
+        }
+      );
+  
+      doc.y = y + altoEncabezado;
+    }
+  
+    dibujarEncabezadoTabla();
+  
+    doc.font("Helvetica").fontSize(6.8);
+  
+    for (const servicio of servicios) {
+      if (doc.y + altoFila > doc.page.height - 128) {
+        dibujarPiePagina();
+        doc.addPage();
+        dibujarEncabezado();
+        doc.y = 165;
+        dibujarEncabezadoTabla();
+        doc.font("Helvetica").fontSize(6.8);
+      }
+  
+      const y = doc.y;
+  
+      doc.rect(x, y, anchoContenido, altoFila).strokeColor("#999999").stroke();
+  
+      doc.fillColor("#333333");
+      doc.text(servicio.nombre, x + 6, y + 5, { width: widths[0] - 12 });
+  
+      doc.text(formatearMoneda(servicio.valorUnitario), x + widths[0], y + 5, {
+        width: widths[1] - 6,
+        align: "right",
+      });
+  
+      doc.text(
+        formatearMoneda(servicio.cantidad),
+        x + widths[0] + widths[1],
+        y + 5,
+        {
+          width: widths[2] - 6,
+          align: "right",
+        }
+      );
+  
+      doc.text(
+        formatearMoneda(servicio.basico),
+        x + widths[0] + widths[1] + widths[2],
+        y + 5,
+        {
+          width: widths[3] - 6,
+          align: "right",
+        }
+      );
+  
+      doc.text(
+        formatearMoneda(servicio.excedente),
+        x + widths[0] + widths[1] + widths[2] + widths[3],
+        y + 5,
+        {
+          width: widths[4] - 6,
+          align: "right",
+        }
+      );
+  
+      doc.y = y + altoFila;
+    }
+  
+    doc.x = margen;
+    doc.moveDown(0.4);
+  }
+
+  dibujarEncabezado();
+
+  doc.y = 185;
+
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(11)
+    .fillColor("#111111")
+    .text(`Bello, ${formatearFechaLarga(new Date().toISOString())}`, margen, doc.y);
+
+  doc.moveDown(2);
+
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(12)
+    .text("LA EMPRESA COTRAFA DE SERVICIOS SOCIALES", {
+      width: anchoContenido,
+      align: "center",
+    });
+
+  doc.moveDown(0.7);
+
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(13)
+    .text("CERTIFICA QUE:", {
+      width: anchoContenido,
+      align: "center",
+    });
+
+  doc.moveDown(1.4);
+
+  doc.font("Helvetica").fontSize(10.5).fillColor("#333333");
+
+  doc.text(
+    `Prestó el servicio funerario del(a) señor(a) ${datos.nombreFallecido}, identificado(a) con cédula de ciudadanía No. ${datos.identificacionFallecido}, fallecido(a) el día ${datos.fechaFallecimiento}, mediante el contrato exequial No. ${datos.contrato}, a nombre del(a) señor(a) ${datos.nombreTitular}, identificado(a) con cédula de ciudadanía No. ${datos.identificacionTitular}.`,
+    {
+      width: anchoContenido,
+      align: "justify",
+      lineGap: 2,
+    }
+  );
+
+  doc.moveDown(0.8);
+
+  doc.text(
+    `El servicio se prestó el día ${datos.fechaServicio}, según Orden de Servicios No. ${datos.ordenServicio}, con las siguientes características:`,
+    {
+      width: anchoContenido,
+      align: "justify",
+      lineGap: 2,
+    }
+  );
+  
+  doc.moveDown(0.3);
+  
+  doc.font("Helvetica-Bold").fontSize(8.5).text(
+    `Dirigido a: ${datos.dirigidoA}`,
+    {
+      width: anchoContenido,
+      align: "left",
+    }
+  );
+  
+  doc.moveDown(0.3);
+
+  const serviciosBasicos = datos.servicios.filter(
+    (servicio) => servicio.categoria === "SERVICIOS BÁSICOS"
+  );
+
+  const serviciosComplementarios = datos.servicios.filter(
+    (servicio) => servicio.categoria === "SERVICIOS COMPLEMENTARIOS"
+  );
+
+  const destinoFinal = datos.servicios.filter(
+    (servicio) => servicio.categoria === "DESTINO FINAL"
+  );
+
+  dibujarTabla("SERVICIOS BÁSICOS", serviciosBasicos);
+  dibujarTabla("SERVICIOS COMPLEMENTARIOS", serviciosComplementarios);
+  dibujarTabla("DESTINO FINAL", destinoFinal);
+  
+  doc.x = margen;
+  verificarEspacio(90);
+
+  doc.x = margen;
+  doc.moveDown(0.4);
+
+  doc.font("Helvetica").fontSize(7.8).fillColor("#333333");
+
+  doc.text(
+    "El Ministerio de Protección Social a través de su oficina jurídica y de apoyo legislativo conceptúa que: El certificado de gastos expedido por la entidad que prestó los servicios funerarios se considera como documento válido para solicitar el pago del auxilio funerario cuando existe un contrato preexequial. (Comunicado 003391 de 16 de marzo de 2005).",
+    {
+      width: anchoContenido,
+      align: "justify",
+      lineGap: 1,
+    }
+  );
+
+  doc.moveDown(0.6);
+
+  doc.text(
+    "Cuando el occiso o sus familiares hayan tomado un Contrato preexequial, se debe tener por documento válido para los efectos previstos la certificación de gastos expedida por la entidad que prestó el servicio de exequias.",
+    {
+      width: anchoContenido,
+      align: "justify",
+      lineGap: 1,
+    }
+  );
+
+  doc.moveDown(0.6);
+
+  doc.text(
+    "Igualmente, en la medida en que el servicio funerario es una actividad de comercio sujeta a las disposiciones tributarias, se debe expedir factura de venta o su documento equivalente, en los términos del artículo 617 del estatuto tributario.",
+    {
+      width: anchoContenido,
+      align: "justify",
+      lineGap: 1,
+    }
+  );
+
+// Bloque final compacto: solo crea otra página si realmente no cabe.
+if (doc.y > doc.page.height - 175) {
+  dibujarPiePagina();
+  doc.addPage();
+  dibujarEncabezado();
+  doc.y = 178;
+}
+
+doc.x = margen;
+doc.moveDown(1);
+
+const yBloqueFinal = doc.y;
+
+doc.font("Helvetica-Bold").fontSize(8).fillColor("#333333").text(
+  "CARTERA SERVICIOS FUNERARIOS",
+  margen + 350,
+  yBloqueFinal,
+  {
+    width: anchoContenido - 350,
+    align: "right",
+  }
+);
+
+doc.x = margen;
+doc.font("Helvetica-Bold").fontSize(7.5).text("Nota", margen, yBloqueFinal + 18);
+
+doc.x = margen;
+doc.font("Helvetica").fontSize(7.1).text(
+  "De conformidad con el ART 111 de la ley 795 de 2003, se enuncian en un único ítem los SERVICIOS BÁSICOS FUNERARIOS: traslado del cuerpo, tanatopraxia o preparación del cuerpo, coche fúnebre, tarjetas de agradecimiento, cinta impresa, personal para el cortejo, cuatro vehículos para la familia, trámites legales, registro civil o eclesiástico y libro para registro de asistencia.",
+  margen,
+  yBloqueFinal + 30,
+  {
+    width: anchoContenido - 105,
+    align: "justify",
+    lineGap: 1,
+  }
+);
+
+const yFirma = Math.max(doc.y + 24, yBloqueFinal + 105);
+
+doc.font("Helvetica-Bold").fontSize(9.5).fillColor("#002869").text(
+  "Didier Jaime Lopera Cardona",
+  margen,
+  yFirma,
+  {
+    underline: true,
+  }
+);
+
+doc.font("Helvetica").fontSize(8.5).fillColor("#333333").text(
+  "Gerente",
+  margen,
+  yFirma + 13
+);
+
+doc.image(qrBuffer, anchoPagina - margen - 68, yFirma - 18, {
+  width: 68,
+});
+
+doc.x = margen;
+doc.y = yFirma + 82;
+
+  dibujarPiePagina();
+
+  doc.end();
+
+  return pdfFinalizado;
+}
+
 function generarHtmlSolicitudCertificadoGastos(datos: {
   nombre: string;
   identificacion: string;
@@ -775,6 +1522,73 @@ function generarHtmlSolicitudCertificadoGastos(datos: {
   `;
 }
 
+function generarPlantillaCorreoCliente(datos: {
+  titulo: string;
+  nombre: string;
+  contenidoHtml: string;
+}) {
+  const urlBase =
+    process.env.NEXT_PUBLIC_APP_URL ||
+    "https://test-autosolicitudes.cotrafasocial.com";
+
+  // Si ya tienes otra imagen corporativa usada en otros certificados,
+  // aquí solo cambias esta ruta.
+  const imagenCorreo = `${urlBase}/correos/respuesta-correo-soli.jpg`;
+
+  return `
+    <!doctype html>
+    <html>
+      <body style="margin:0; padding:0; background:#f3f4f6; font-family:Arial, Helvetica, sans-serif;">
+        <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f3f4f6; padding:30px 12px;">
+          <tr>
+            <td align="center">
+              <table role="presentation" width="680" cellspacing="0" cellpadding="0" style="max-width:680px; width:100%; background:#ffffff; border-radius:14px; overflow:hidden; box-shadow:0 8px 28px rgba(0,0,0,0.08);">
+
+                <tr>
+                  <td>
+                    <img
+                      src="${imagenCorreo}"
+                      alt="Cotrafa Social"
+                      style="display:block; width:100%; max-width:680px; height:auto; border:0;"
+                    />
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="padding:34px 38px 30px; text-align:center;">
+                    <h1 style="margin:0; color:#002869; font-size:26px; line-height:1.3; font-weight:800;">
+                      ${escaparHtml(datos.titulo)}
+                    </h1>
+
+                    <p style="margin:22px 0 0; color:#4b5563; font-size:16px; line-height:1.7;">
+                      Hola, <strong style="color:#002869;">${escaparHtml(datos.nombre)}</strong>.
+                    </p>
+
+                    ${datos.contenidoHtml}
+
+                    <p style="margin:28px 0 0; color:#002869; font-size:15px; line-height:1.6; font-weight:700;">
+                      Cotrafa Social
+                    </p>
+                  </td>
+                </tr>
+
+                <tr>
+                  <td style="background:#002869; padding:18px 28px; text-align:center;">
+                    <p style="margin:0; color:#ffffff; font-size:11px; line-height:1.5;">
+                      Este mensaje fue generado automáticamente. Por favor no respondas a este correo.
+                    </p>
+                  </td>
+                </tr>
+
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+    </html>
+  `;
+}
+
 async function enviarCorreoConfirmacion(datos: {
     destinatario: string;
     nombre: string;
@@ -822,6 +1636,172 @@ async function enviarCorreoConfirmacion(datos: {
         cedulaFallecido: datos.cedulaFallecido,
         nombreFallecido: datos.nombreFallecido,
         fechaFallecimiento: datos.fechaFallecimiento,
+      }),
+    });
+  }
+
+
+  async function enviarCertificadoGastosAutomatico(datos: {
+    destinatario: string;
+    nombre: string;
+    pdfBytes: Buffer;
+    codigoAutenticidad: string;
+    formaEntrega: "fisico" | "digital";
+    correoInterno?: string;
+  }) {
+    const host = process.env.SMTP_HOST;
+    const port = Number(process.env.SMTP_PORT || 465);
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASSWORD;
+    const from = process.env.SMTP_FROM || user;
+  
+    if (!host || !user || !pass || !from) {
+      throw new Error("Faltan variables de entorno para envío de correo.");
+    }
+  
+    const transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: {
+        user,
+        pass,
+      },
+    });
+  
+    const htmlCorreo =
+      datos.formaEntrega === "digital"
+        ? generarPlantillaCorreoCliente({
+            titulo: "Certificado generado exitosamente",
+            nombre: datos.nombre,
+            contenidoHtml: `
+              <p style="margin:18px 0 0; color:#4b5563; font-size:15px; line-height:1.8;">
+                Nos complace informarte que tu certificado de
+                <strong style="color:#002869;">gastos servicios funerarios</strong>
+                ha sido generado exitosamente.
+              </p>
+  
+              <p style="margin:18px 0 0; color:#4b5563; font-size:15px; line-height:1.8;">
+                Lo encontrarás adjunto en este correo para que puedas consultarlo,
+                descargarlo o compartirlo cuando lo necesites.
+              </p>
+  
+              <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:24px; background:#f5fafd; border:1px solid #d8edf8; border-radius:12px;">
+                <tr>
+                  <td style="padding:18px 22px; text-align:left; color:#374151; font-size:14px; line-height:1.7;">
+                    <strong style="color:#002869;">Nombre:</strong> ${escaparHtml(datos.nombre)}<br />
+                    <strong style="color:#002869;">Código de autenticidad:</strong> ${escaparHtml(datos.codigoAutenticidad)}
+                  </td>
+                </tr>
+              </table>
+  
+              <p style="margin:24px 0 0; color:#4b5563; font-size:15px; line-height:1.8;">
+                En Cotrafa Social seguimos trabajando para ofrecerte servicios más ágiles y digitales que faciliten tus trámites.
+              </p>
+  
+              <p style="margin:20px 0 0; color:#4b5563; font-size:15px; line-height:1.8;">
+                Gracias por ser parte de nuestra comunidad.
+              </p>
+            `,
+          })
+        : `
+          <p>Cordial saludo,</p>
+  
+          <p>
+            Se generó un <strong>Certificado de gastos servicios funerarios</strong>
+            solicitado para entrega física.
+          </p>
+  
+          <p>
+            <strong>Nombre del titular:</strong> ${escaparHtml(datos.nombre)}<br />
+            <strong>Código de autenticidad:</strong> ${escaparHtml(datos.codigoAutenticidad)}
+          </p>
+  
+          <p>
+            Se adjunta el PDF para gestión interna, impresión y entrega al usuario.
+          </p>
+  
+          <p>
+            Atentamente,<br />
+            <strong>Autosolicitudes Cotrafa Social</strong>
+          </p>
+        `;
+  
+    await transporter.sendMail({
+      from: `"Cotrafa Social" <${from}>`,
+      to:
+        datos.formaEntrega === "digital"
+          ? datos.destinatario
+          : datos.correoInterno || CORREO_INTERNO_GASTOS_FISICO,
+      subject: "Certificado de gastos servicios funerarios",
+      html: htmlCorreo,
+      attachments: [
+        {
+          filename: `certificado-gastos-${datos.codigoAutenticidad}.pdf`,
+          content: datos.pdfBytes,
+          contentType: "application/pdf",
+        },
+      ],
+    });
+  }
+
+  async function enviarCorreoDocumentoFisicoEnProceso(datos: {
+    destinatario: string;
+    nombre: string;
+    lugarRetiro: string;
+  }) {
+    const host = process.env.SMTP_HOST;
+    const port = Number(process.env.SMTP_PORT || 465);
+    const user = process.env.SMTP_USER;
+    const pass = process.env.SMTP_PASSWORD;
+    const from = process.env.SMTP_FROM || user;
+  
+    if (!host || !user || !pass || !from) {
+      throw new Error("Faltan variables de entorno para envío de correo.");
+    }
+  
+    const transporter = nodemailer.createTransport({
+      host,
+      port,
+      secure: port === 465,
+      auth: {
+        user,
+        pass,
+      },
+    });
+  
+    await transporter.sendMail({
+      from: `"Cotrafa Social" <${from}>`,
+      to: datos.destinatario,
+      subject: "Certificado de gastos servicios funerarios en proceso",
+      html: generarPlantillaCorreoCliente({
+        titulo: "Solicitud recibida exitosamente",
+        nombre: datos.nombre,
+        contenidoHtml: `
+          <p style="margin:18px 0 0; color:#4b5563; font-size:15px; line-height:1.8;">
+            Hemos recibido tu solicitud de
+            <strong style="color:#002869;">Certificado de gastos servicios funerarios</strong>
+            para entrega física.
+          </p>
+  
+          <table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="margin-top:24px; background:#f5fafd; border:1px solid #d8edf8; border-radius:12px;">
+            <tr>
+              <td style="padding:18px 22px; text-align:left; color:#374151; font-size:14px; line-height:1.7;">
+                <strong style="color:#002869;">Nombre:</strong> ${escaparHtml(datos.nombre)}<br />
+                <strong style="color:#002869;">Sede seleccionada:</strong> ${escaparHtml(datos.lugarRetiro)}
+              </td>
+            </tr>
+          </table>
+  
+          <p style="margin:24px 0 0; color:#4b5563; font-size:15px; line-height:1.8;">
+            Tu documento estará habilitado para retiro en un plazo máximo de
+            <strong>tres (3) días hábiles</strong>.
+          </p>
+  
+          <p style="margin:18px 0 0; color:#4b5563; font-size:15px; line-height:1.8;">
+            Si tienes alguna duda o inquietud, puedes comunicarte con nuestra línea de atención.
+          </p>
+        `,
       }),
     });
   }
@@ -917,6 +1897,7 @@ export async function POST(request: Request) {
       entidadFinanciera,
       cedulaFallecido,
       lugarRetiro,
+      formaEntrega,
     } = await request.json();
 
 
@@ -1032,6 +2013,20 @@ export async function POST(request: Request) {
       );
     }
 
+    const formaEntregaTexto = String(formaEntrega || "fisico")
+    .trim()
+    .toLowerCase();
+  
+  if (!["fisico", "digital"].includes(formaEntregaTexto)) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message: "Debe seleccionar si desea el documento físico o digital.",
+      },
+      { status: 400 }
+    );
+  }
+  
   if (!destinoGastos || !String(destinoGastos).trim()) {
     return NextResponse.json(
       {
@@ -1053,8 +2048,11 @@ export async function POST(request: Request) {
   }
   
   const lugarRetiroTexto = String(lugarRetiro || "").trim();
-  
-  if (!["Bello", "Rionegro"].includes(lugarRetiroTexto)) {
+
+  if (
+    formaEntregaTexto === "fisico" &&
+    !["Bello", "Rionegro"].includes(lugarRetiroTexto)
+  ) {
     return NextResponse.json(
       {
         ok: false,
@@ -1087,40 +2085,210 @@ export async function POST(request: Request) {
       }
     }
 
-    const codigoSolicitud = generarCodigoSolicitud();
+
 
     const nombreFallecidoSolicitud =
-  fallecidoRelacionado?.nombreCompleto || "Pendiente por validar";
+    fallecidoRelacionado?.nombreCompleto || "Pendiente por validar";
+  
+  const fechaFallecimientoSolicitud =
+    fallecidoRelacionado?.fechaFallecimiento || "";
+  
+  const planesExequiales = esSolicitudEmpresarial
+    ? contratosParaSolicitud.map((contrato) => ({
+        contrato: obtenerTexto(contrato.contrato) || "No disponible",
+        producto:
+          obtenerTexto(contrato.nombre_producto) ||
+          obtenerTexto(contrato.descripcion_producto) ||
+          obtenerTexto(contrato.producto) ||
+          obtenerTexto(contrato.descripcion_grupal) ||
+          "Plan empresarial",
+      }))
+    : await obtenerPlanesExequiales(contratosExequiales);
+  
+  const contratosTexto = planesExequiales
+    .map((plan) => plan.contrato)
+    .join(" / ");
+  
+  const productosTexto = planesExequiales
+    .map((plan) => plan.producto)
+    .join(" / ");
+  
+  const entidadFinancieraTexto = String(entidadFinanciera || "").trim();
+  
+  const destinoGastosTexto =
+    String(destinoGastos).trim() === "interesado"
+      ? "A quien pueda interesar"
+      : entidadFinancieraTexto || "Entidad no especificada";
+  
 
-const fechaFallecimientoSolicitud =
-  fallecidoRelacionado?.fechaFallecimiento || "";
+  let ordenServicioEncontrada = false;
 
-    const planesExequiales = esSolicitudEmpresarial
-  ? contratosParaSolicitud.map((contrato) => ({
-      contrato: obtenerTexto(contrato.contrato) || "No disponible",
-      producto:
-        obtenerTexto(contrato.nombre_producto) ||
-        obtenerTexto(contrato.descripcion_producto) ||
-        obtenerTexto(contrato.producto) ||
-        obtenerTexto(contrato.descripcion_grupal) ||
-        "Plan empresarial",
-    }))
-  : await obtenerPlanesExequiales(contratosExequiales);
 
-    const contratosTexto = planesExequiales
-      .map((plan) => plan.contrato)
-      .join(" / ");
-
-    const productosTexto = planesExequiales
-      .map((plan) => plan.producto)
-      .join(" / ");
-
-      const entidadFinancieraTexto = String(entidadFinanciera || "").trim();
-
-      const destinoGastosTexto =
-        String(destinoGastos).trim() === "interesado"
-          ? "A quien pueda interesar"
-          : entidadFinancieraTexto || "Entidad no especificada";
+  try {
+    const ordenServicio = await buscarOrdenServicioPorCedulaFallecido(
+      String(cedulaFallecido).trim()
+    );
+  
+    if (ordenServicio) {
+      ordenServicioEncontrada = true;
+      const datosOrdenServicio = await consultarOrdenServicioKaring(ordenServicio);
+      const fallecidoOrden = extraerPrimerFallecidoOrden(datosOrdenServicio);
+  
+      if (fallecidoOrden) {
+        const documentoFallecidoOrden = normalizarDocumento(
+          String(fallecidoOrden.id_fallecido || "")
+        );
+  
+        const documentoFallecidoSolicitud = normalizarDocumento(
+          String(cedulaFallecido).trim()
+        );
+  
+        if (documentoFallecidoOrden === documentoFallecidoSolicitud) {
+          const codigoAutenticidad = generarCodigoAutenticidadGastos();
+  
+          const nombreFallecidoOrden = [
+            obtenerTexto(fallecidoOrden.nombres_fallecido),
+            obtenerTexto(fallecidoOrden.primer_apellido_fallecido),
+            obtenerTexto(fallecidoOrden.segundo_apellido_fallecido),
+          ]
+            .filter(Boolean)
+            .join(" ");
+  
+          const fechaFallecimientoOrden = formatearFechaLarga(
+            obtenerTexto(fallecidoOrden.fecha_fallecimiento)
+          );
+  
+          const fechaServicioOrden = formatearFechaLarga(
+            obtenerTexto(fallecidoOrden.fecha_solicitud) ||
+              obtenerTexto(fallecidoOrden.fecha)
+          );
+  
+          const serviciosOrden = extraerServiciosOrden(datosOrdenServicio);
+  
+          const contratoAutomatico =
+            planesExequiales[0]?.contrato ||
+            obtenerTexto(contratosParaSolicitud[0]?.contrato) ||
+            "No disponible";
+  
+          const pdfBytes = await generarPdfCertificadoGastosAutomatico({
+            dirigidoA: destinoGastosTexto,
+            codigoAutenticidad,
+            ordenServicio,
+            nombreTitular: datosTitular.nombre,
+            identificacionTitular:
+              datosTitular.identificacion || String(identificacion).trim(),
+            contrato: contratoAutomatico,
+            nombreFallecido: nombreFallecidoOrden || String(cedulaFallecido).trim(),
+            identificacionFallecido: String(cedulaFallecido).trim(),
+            fechaFallecimiento: fechaFallecimientoOrden,
+            fechaServicio: fechaServicioOrden,
+            servicios: serviciosOrden,
+          });
+  
+          const datosDocAutomatico = JSON.stringify([
+            {
+              solicitud: "Certificado de gastos servicios funerarios",
+              tipoSolicitud: "automatico",
+              nombre: datosTitular.nombre,
+              formaEntrega: formaEntregaTexto,
+              identificacion: datosTitular.identificacion,
+              contrato: contratoAutomatico,
+              destinoGastos: destinoGastosTexto,
+              entidadFinanciera: entidadFinancieraTexto,
+              lugarRetiro: lugarRetiroTexto,
+              cedulaFallecido: String(cedulaFallecido).trim(),
+              nombreFallecido: nombreFallecidoOrden,
+              fechaFallecimiento: fechaFallecimientoOrden,
+              ordenServicio,
+              codigoAutenticidad,
+              correoRelacionado: datosTitular.email,
+            },
+          ]);
+  
+          await registrarSolicitudEnSheets({
+            fechaCreacion: obtenerFechaRegistroTexto(),
+            usuCreacion: String(identificacion).trim(),
+            codigoDoc: codigoAutenticidad,
+            tipoDoc: "Certificado de gastos servicios funerarios",
+            quienNecesitaDoc: "Titular",
+            dirigidoADoc: destinoGastosTexto,
+            datosDoc: datosDocAutomatico,
+          });
+  
+          await registrarSolicitudNivel2CertificadoGastos({
+            fechaSolicitud: obtenerFechaRegistroTexto(),
+            lugarRetiro: "AUTOMÁTICO",
+            cedulaTitular:
+              datosTitular.identificacion || String(identificacion).trim(),
+            nombreTitular: datosTitular.nombre,
+            cedulaFallecido: String(cedulaFallecido).trim(),
+            nombreFallecido: nombreFallecidoOrden,
+            fechaFallecimiento: fechaFallecimientoOrden,
+            dirigidoA: destinoGastosTexto,
+            observacion: `${datosTitular.email} / ${codigoAutenticidad} / ${ordenServicio} / AUTOMÁTICO / ${formaEntregaTexto.toUpperCase()}`,
+          });
+  
+          if (formaEntregaTexto === "digital") {
+            await enviarCertificadoGastosAutomatico({
+              destinatario: datosTitular.email,
+              nombre: datosTitular.nombre,
+              pdfBytes,
+              codigoAutenticidad,
+              formaEntrega: "digital",
+            });
+          } else {
+            await enviarCertificadoGastosAutomatico({
+              destinatario: datosTitular.email,
+              nombre: datosTitular.nombre,
+              pdfBytes,
+              codigoAutenticidad,
+              formaEntrega: "fisico",
+              correoInterno: CORREO_INTERNO_GASTOS_FISICO,
+            });
+          
+            await enviarCorreoDocumentoFisicoEnProceso({
+              destinatario: datosTitular.email,
+              nombre: datosTitular.nombre,
+              lugarRetiro: lugarRetiroTexto,
+            });
+          }
+  
+          return NextResponse.json(
+            {
+              ok: true,
+              estado: "automatico",
+              formaEntrega: formaEntregaTexto,
+              message:
+                formaEntregaTexto === "digital"
+                  ? "Tu certificado fue generado automáticamente y enviado al correo electrónico registrado."
+                  : "Tu solicitud fue recibida correctamente. El documento físico estará habilitado para retiro en la sede seleccionada dentro de tres (3) días hábiles.",
+              codigoSolicitud: codigoAutenticidad,
+              ordenServicio,
+            },
+            { status: 200 }
+          );
+        }
+      }
+    }
+  } catch (error) {
+    console.error(
+      "No fue posible generar certificado automático de gastos:",
+      error
+    );
+  
+    if (ordenServicioEncontrada) {
+      return NextResponse.json(
+        {
+          ok: false,
+          message:
+            "Se encontró una orden de servicio para el fallecido, pero no fue posible generar el certificado automático en este momento. Intenta nuevamente o comunícate con nuestro equipo de atención.",
+        },
+        { status: 500 }
+      );
+    }
+  }
+  
+  const codigoSolicitud = generarCodigoSolicitud();
 
     const datosDoc = JSON.stringify([
       {
@@ -1130,6 +2298,7 @@ const fechaFallecimientoSolicitud =
           : esSolicitudMiPlanSinFallecido
             ? "mi-plan-validacion"
             : "normal",
+        formaEntrega: formaEntregaTexto,
         nombre: datosTitular.nombre,
         tipoIdentificacion: datosTitular.tipoIdentificacion,
         identificacion: datosTitular.identificacion,
@@ -1157,7 +2326,10 @@ const fechaFallecimientoSolicitud =
 
       await registrarSolicitudNivel2CertificadoGastos({
         fechaSolicitud: obtenerFechaRegistroTexto(),
-        lugarRetiro: lugarRetiroTexto.toLocaleUpperCase("es-CO"),
+        lugarRetiro:
+        formaEntregaTexto === "digital"
+          ? "DIGITAL"
+          : lugarRetiroTexto.toLocaleUpperCase("es-CO"),
         cedulaTitular:
           datosTitular.identificacion || String(identificacion).trim(),
         nombreTitular: datosTitular.nombre,
@@ -1165,7 +2337,7 @@ const fechaFallecimientoSolicitud =
         nombreFallecido: nombreFallecidoSolicitud,
         fechaFallecimiento: fechaFallecimientoSolicitud,
         dirigidoA: destinoGastosTexto,
-        observacion: `${datosTitular.email} / ${codigoSolicitud}`,
+        observacion: `${datosTitular.email} / ${codigoSolicitud} / ${formaEntregaTexto.toUpperCase()}`,
       });
 
       await enviarCorreoConfirmacion({
@@ -1186,8 +2358,11 @@ const fechaFallecimientoSolicitud =
       return NextResponse.json(
         {
           ok: true,
+          formaEntrega: formaEntregaTexto,
           message:
-            "Solicitud enviada exitosamente.\n\nTu solicitud ha sido recibida y será validada por nuestro equipo. Podrás retirarla físicamente en la sede seleccionada después de transcurridos tres (3) días hábiles.",
+            formaEntregaTexto === "digital"
+              ? "Solicitud enviada exitosamente.\n\nTu solicitud ha sido recibida y será validada por nuestro equipo. La respuesta será enviada al correo electrónico registrado dentro de los próximos tres (3) días hábiles."
+              : "Solicitud enviada exitosamente.\n\nTu solicitud ha sido recibida y será validada por nuestro equipo. Podrás retirarla físicamente en la sede seleccionada después de transcurridos tres (3) días hábiles.",
           codigoSolicitud,
         },
         { status: 200 }

@@ -41,8 +41,10 @@ export default function SolicitudesPage() {
     >("afiliado");
   const [productoSeleccionado, setProductoSeleccionado] = useState("afiliacion");
   const [certificadoSeleccionado, setCertificadoSeleccionado] = useState("afiliacion-nucleo");
+  const [mostrarModalFormaEntregaGastos, setMostrarModalFormaEntregaGastos] = useState(false);
   const [mostrarModalTipoGasto, setMostrarModalTipoGasto] = useState(false);
   const [tipoGastoSeleccionado, setTipoGastoSeleccionado] = useState("");
+  const [formaEntregaGastos, setFormaEntregaGastos] = useState<"fisico" | "digital">("fisico");
   const [mostrarModalDestinoCertificado, setMostrarModalDestinoCertificado] = useState(false);
   const [mostrarModalPersonaCertificado, setMostrarModalPersonaCertificado] = useState(false);
   const [mostrarModalDocumentoFallecido, setMostrarModalDocumentoFallecido] = useState(false);
@@ -1018,7 +1020,7 @@ export default function SolicitudesPage() {
       return;
     }
 
-    if (!lugarRetiroGastos) {
+    if (formaEntregaGastos === "fisico" && !lugarRetiroGastos) {
       alert("Por favor selecciona dónde deseas retirar el certificado.");
       return;
     }
@@ -1048,6 +1050,7 @@ export default function SolicitudesPage() {
           entidadFinanciera: entidadPensiones.trim(),
           cedulaFallecido: cedulaFallecido.trim(),
           lugarRetiro: lugarRetiroGastos,
+          formaEntrega: formaEntregaGastos,
         }),
       });
   
@@ -1074,6 +1077,7 @@ export default function SolicitudesPage() {
       setLugarRetiroGastos("");
       setNombreFallecido("");
       setFechaFallecimiento("");
+      setFormaEntregaGastos("fisico");
     } catch (error) {
       alert(
         "No fue posible registrar la solicitud de certificado de gastos servicios funerarios en este momento."
@@ -1371,7 +1375,7 @@ export default function SolicitudesPage() {
       return;
     }
   
-    if (!lugarRetiroGastos) {
+    if (formaEntregaGastos === "fisico" && !lugarRetiroGastos) {
       alert("Por favor selecciona dónde deseas retirar el certificado.");
       return;
     }
@@ -1727,7 +1731,8 @@ export default function SolicitudesPage() {
               setNombreFallecido("");
               setFechaFallecimiento("");
               setResultadoNotaria(null);
-              setMostrarModalTipoGasto(true);
+              setFormaEntregaGastos("fisico");
+              setMostrarModalFormaEntregaGastos(true);
               return;
             }
             
@@ -1810,7 +1815,7 @@ export default function SolicitudesPage() {
                 }}
                 isRequired
               />
-
+{formaEntregaGastos === "fisico" && (
               <div>
               <div className="mb-3 flex items-center gap-2 text-[#002869]">
                 <MapPin className="h-5 w-5" />
@@ -1891,6 +1896,8 @@ export default function SolicitudesPage() {
                   </div>
                 </div>
               </div>
+
+)}
             </div>
           </>
         )}
@@ -2947,6 +2954,99 @@ export default function SolicitudesPage() {
   </div>
 )}
 
+{mostrarModalFormaEntregaGastos && (
+  <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4">
+    <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
+      <div className="flex items-center justify-between border-b border-gray-100 px-6 py-5">
+        <div className="flex items-center gap-4">
+          <div className="flex h-11 w-11 items-center justify-center rounded-full border-2 border-[#002869]">
+            <Info className="h-6 w-6 text-[#002869]" />
+          </div>
+
+          <h3 className="text-xl font-bold text-gray-900">
+            Forma de entrega
+          </h3>
+        </div>
+
+        <button
+          type="button"
+          onClick={() => setMostrarModalFormaEntregaGastos(false)}
+          className="rounded-full p-2 text-[#002869] transition hover:bg-gray-100"
+        >
+          <X className="h-7 w-7" />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-5 py-6 text-center sm:px-6 sm:py-10">
+        <p className="text-xl font-semibold text-gray-500">
+          ¿Cómo desea su documento?
+        </p>
+
+        <p className="mt-3 text-sm text-gray-500">
+          Selecciona si deseas recibir el certificado de forma digital o reclamarlo físicamente en una sede.
+        </p>
+
+        <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <button
+            type="button"
+            onClick={() => setFormaEntregaGastos("digital")}
+            className={`rounded-lg border p-6 transition hover:border-[#002869] hover:shadow-md ${
+              formaEntregaGastos === "digital"
+                ? "border-[#002869] bg-[#F5FAFD]"
+                : "border-gray-200 bg-white"
+            }`}
+          >
+            <FileText className="mx-auto h-9 w-9 text-[#002869]" />
+            <span className="mt-3 block text-lg font-bold text-[#002869]">
+              Digital
+            </span>
+            <span className="mt-2 block text-sm text-gray-500">
+              Se enviará al correo electrónico registrado.
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setFormaEntregaGastos("fisico")}
+            className={`rounded-lg border p-6 transition hover:border-[#002869] hover:shadow-md ${
+              formaEntregaGastos === "fisico"
+                ? "border-[#002869] bg-[#F5FAFD]"
+                : "border-gray-200 bg-white"
+            }`}
+          >
+            <Building2 className="mx-auto h-9 w-9 text-[#002869]" />
+            <span className="mt-3 block text-lg font-bold text-[#002869]">
+              Físico
+            </span>
+            <span className="mt-2 block text-sm text-gray-500">
+              Se gestionará para retiro en sede.
+            </span>
+          </button>
+        </div>
+      </div>
+
+      <div className="shrink-0 flex flex-col justify-center gap-3 border-t border-gray-100 bg-white px-5 py-4 sm:flex-row sm:px-6 sm:py-5">
+        <Button
+          className="border border-[#002869] bg-white px-12 py-6 font-bold text-[#002869]"
+          onClick={() => setMostrarModalFormaEntregaGastos(false)}
+        >
+          Regresar
+        </Button>
+
+        <Button
+          className="w-full bg-[#0090D1] px-8 py-5 font-bold text-white hover:bg-[#007bb3] sm:w-auto sm:px-12 sm:py-6"
+          onClick={() => {
+            setMostrarModalFormaEntregaGastos(false);
+            setMostrarModalTipoGasto(true);
+          }}
+        >
+          Continuar
+        </Button>
+      </div>
+    </div>
+  </div>
+)}
+
 {mostrarModalTipoGasto && (
   <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-3 sm:p-4">
     <div className="flex max-h-[calc(100dvh-1.5rem)] w-full max-w-xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
@@ -2976,9 +3076,9 @@ export default function SolicitudesPage() {
     <div className="flex items-start gap-3">
       <Info className="mt-0.5 h-5 w-5 flex-none text-[#0090D1]" />
       <p>
-        Este certificado requiere validación por parte de nuestro equipo.
-        Podrás retirarlo físicamente en la sede seleccionada después de
-        <strong> transcurridos tres (3) días hábiles.</strong>
+        {formaEntregaGastos === "digital"
+          ? "Validaremos la información del fallecido y, si el certificado puede generarse automáticamente, será enviado al correo electrónico registrado."
+          : "Validaremos la información del fallecido. Si seleccionaste entrega física, podrás retirarlo en la sede seleccionada después de transcurridos tres (3) días hábiles."}
       </p>
     </div>
   </div>
@@ -3003,6 +3103,7 @@ export default function SolicitudesPage() {
           onClick={() => {
             if (!enviandoDetallePago) {
               setMostrarModalTipoGasto(false);
+              setMostrarModalFormaEntregaGastos(true);
             }
           }}
           disabled={enviandoDetallePago}
