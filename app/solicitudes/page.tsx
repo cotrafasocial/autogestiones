@@ -1038,6 +1038,9 @@ export default function SolicitudesPage() {
   
     setEnviandoDetallePago(true);
   
+
+    console.log("FORMA ENTREGA FRONT:", formaEntregaGastos);
+    
     try {
       const respuesta = await fetch("/api/solicitudes/certificado-gastos", {
         method: "POST",
@@ -2989,7 +2992,11 @@ export default function SolicitudesPage() {
         <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
           <button
             type="button"
-            onClick={() => setFormaEntregaGastos("digital")}
+            onClick={() => {
+              setFormaEntregaGastos("digital");
+              setMostrarModalFormaEntregaGastos(false);
+              setMostrarModalTipoGasto(true);
+            }}
             className={`rounded-lg border p-6 transition hover:border-[#002869] hover:shadow-md ${
               formaEntregaGastos === "digital"
                 ? "border-[#002869] bg-[#F5FAFD]"
@@ -3007,7 +3014,11 @@ export default function SolicitudesPage() {
 
           <button
             type="button"
-            onClick={() => setFormaEntregaGastos("fisico")}
+            onClick={() => {
+              setFormaEntregaGastos("fisico");
+              setMostrarModalFormaEntregaGastos(false);
+              setMostrarModalTipoGasto(true);
+            }}
             className={`rounded-lg border p-6 transition hover:border-[#002869] hover:shadow-md ${
               formaEntregaGastos === "fisico"
                 ? "border-[#002869] bg-[#F5FAFD]"

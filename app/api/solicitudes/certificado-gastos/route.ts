@@ -2013,11 +2013,13 @@ export async function POST(request: Request) {
       );
     }
 
-    const formaEntregaTexto = String(formaEntrega || "fisico")
-    .trim()
-    .toLowerCase();
-  
-  if (!["fisico", "digital"].includes(formaEntregaTexto)) {
+    const formaEntregaTexto = String(formaEntrega || "")
+  .trim()
+  .toLowerCase();
+
+console.log("FORMA ENTREGA GASTOS:", formaEntregaTexto);
+
+if (!["fisico", "digital"].includes(formaEntregaTexto)) {
     return NextResponse.json(
       {
         ok: false,
