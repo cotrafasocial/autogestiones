@@ -2450,8 +2450,10 @@ if (!["fisico", "digital"].includes(formaEntregaTexto)) {
       {
         ok: false,
         message:
-          "No fue posible generar el certificado digital porque no se encontró una orden de servicio asociada al documento del fallecido.",
-      },
+        "En este momento no es posible generar automáticamente el certificado de gastos servicios funerarios en formato digital.\n\n" +
+        "Te invitamos a realizar la solicitud en formato físico, seleccionando la oficina donde deseas reclamarlo.\n\n" +
+        "Tu solicitud será gestionada en un plazo máximo de tres (3) días hábiles.",
+    },
       { status: 422 }
     );
   }
