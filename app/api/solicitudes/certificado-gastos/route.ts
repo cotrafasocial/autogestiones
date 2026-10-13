@@ -32,7 +32,7 @@ type FallecidoSolicitud = {
 };
 
 const CORREO_INTERNO_GASTOS_FISICO =
-  process.env.CORREO_INTERNO_GASTOS_FISICO || "analistati@cotrafasocial.com.co";
+  process.env.CORREO_INTERNO_GASTOS_FISICO?.trim();
 
   const LIMITE_SOLICITUDES_GASTOS_DIA = 3;
 
@@ -242,7 +242,7 @@ function extraerServiciosOrden(datosOrden: OrdenServicioKaring): ServicioOrden[]
       const codigoServicio = obtenerTexto(servicio.servicio);
       const cantidad = obtenerNumero(servicio.cantidad) || 0;
       const basico = obtenerNumero(servicio.valor_convenio) || 0;
-      const excedente = obtenerNumero(servicio.valor_excedente) || 0;
+      const excedente = 0;
       const valorUnitario = cantidad > 0 ? basico / cantidad : basico;
 
       return {
@@ -1286,7 +1286,7 @@ async function generarPdfCertificadoGastosAutomatico(datos: {
       );
   
       doc.text(
-        formatearMoneda(servicio.excedente),
+        "0,00",
         x + widths[0] + widths[1] + widths[2] + widths[3],
         y + 5,
         {
@@ -1383,6 +1383,67 @@ async function generarPdfCertificadoGastosAutomatico(datos: {
   dibujarTabla("SERVICIOS BÁSICOS", serviciosBasicos);
   dibujarTabla("SERVICIOS COMPLEMENTARIOS", serviciosComplementarios);
   dibujarTabla("DESTINO FINAL", destinoFinal);
+  
+  // Calcular el valor total de todos los servicios básicos,
+  // complementarios y destino final.
+  const valorTotalCertificado = datos.servicios.reduce(
+    (total, servicio) => total + servicio.basico,
+    0
+  );
+  
+  // Dibujar fila del valor total conservando el ancho de la tabla.
+  verificarEspacio(26);
+  
+  const xTotal = margen;
+  const yTotal = doc.y + 2;
+  const altoTotal = 22;
+  
+  doc
+    .rect(xTotal, yTotal, anchoContenido, altoTotal)
+    .fillAndStroke("#eeeeee", "#333333");
+  
+  doc
+    .font("Helvetica-Bold")
+    .fontSize(8)
+    .fillColor("#333333")
+    .text(
+      "VALOR TOTAL",
+      xTotal + 8,
+      yTotal + 7,
+      {
+        width: 330,
+        align: "left",
+      }
+    );
+  
+    doc
+    .font("Helvetica-Bold")
+    .fontSize(8)
+    .text(
+      formatearMoneda(valorTotalCertificado),
+      xTotal + 355,
+      yTotal + 7,
+      {
+        width: 79,
+        align: "right",
+      }
+    );
+  
+    doc
+    .font("Helvetica-Bold")
+    .fontSize(8)
+    .text(
+      "0,00",
+      xTotal + 440,
+      yTotal + 7,
+      {
+        width: 94,
+        align: "right",
+      }
+    );
+  
+  doc.y = yTotal + altoTotal + 8;
+  doc.x = margen;
   
   doc.x = margen;
   verificarEspacio(90);
@@ -1725,6 +1786,15 @@ async function enviarCorreoConfirmacion(datos: {
     if (!host || !user || !pass || !from) {
       throw new Error("Faltan variables de entorno para envío de correo.");
     }
+
+    if (
+      datos.formaEntrega === "fisico" &&
+      !CORREO_INTERNO_GASTOS_FISICO
+    ) {
+      throw new Error(
+        "Falta configurar CORREO_INTERNO_GASTOS_FISICO."
+      );
+    }
   
     const transporter = nodemailer.createTransport({
       host,
@@ -1797,9 +1867,9 @@ async function enviarCorreoConfirmacion(datos: {
     await transporter.sendMail({
       from: `"Cotrafa Social" <${from}>`,
       to:
-        datos.formaEntrega === "digital"
-          ? datos.destinatario
-          : datos.correoInterno || CORREO_INTERNO_GASTOS_FISICO,
+      datos.formaEntrega === "digital"
+        ? datos.destinatario
+        : CORREO_INTERNO_GASTOS_FISICO!,
       subject: "Certificado de gastos servicios funerarios",
       html: htmlCorreo,
       attachments: [
