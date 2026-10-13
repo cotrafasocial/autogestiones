@@ -34,6 +34,8 @@ type FallecidoSolicitud = {
 const CORREO_INTERNO_GASTOS_FISICO =
   process.env.CORREO_INTERNO_GASTOS_FISICO || "analistati@cotrafasocial.com.co";
 
+  const LIMITE_SOLICITUDES_GASTOS_DIA = 3;
+
 
 type OrdenServicioKaring = Record<string, unknown>;
 
@@ -904,7 +906,9 @@ async function registrarSolicitudEnSheets(datos: {
   quienNecesitaDoc: string;
   dirigidoADoc: string;
   datosDoc: string;
+  formaEntrega?: string;
 }) {
+
   const spreadsheetId = process.env.GOOGLE_SHEET_ID;
 
   if (!spreadsheetId) {
@@ -989,6 +993,69 @@ async function registrarSolicitudNivel2CertificadoGastos(datos: {
       ],
     },
   });
+}
+
+function normalizarFechaDia(valor: unknown) {
+  const texto = String(valor || "")
+    .split(",")[0]
+    .trim();
+
+  const partes = texto.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+
+  if (!partes) {
+    return texto;
+  }
+
+  const [, dia, mes, anio] = partes;
+
+  return `${dia.padStart(2, "0")}/${mes.padStart(2, "0")}/${anio}`;
+}
+
+function obtenerFechaColombiaSoloDia() {
+  return normalizarFechaDia(
+    new Date().toLocaleDateString("es-CO", {
+      timeZone: "America/Bogota",
+      day: "2-digit",
+      month: "2-digit",
+      year: "numeric",
+    })
+  );
+}
+
+async function contarSolicitudesGastosDelDia(cedulaTitular: string) {
+  const spreadsheetId = process.env.GOOGLE_SHEET_ID;
+
+  if (!spreadsheetId) {
+    throw new Error("Falta GOOGLE_SHEET_ID.");
+  }
+
+  const auth = obtenerClienteGoogleSheets();
+
+  const sheets = google.sheets({
+    version: "v4",
+    auth,
+  });
+
+  const respuesta = await sheets.spreadsheets.values.get({
+    spreadsheetId,
+    range: "'Solicitudes'!A:I",
+  });
+
+  const filas = respuesta.data.values || [];
+  const fechaHoy = obtenerFechaColombiaSoloDia();
+  const cedulaBuscada = normalizarDocumento(cedulaTitular);
+
+  return filas.filter((fila) => {
+    const fechaFila = normalizarFechaDia(fila[0]);
+    const cedulaFila = normalizarDocumento(String(fila[2] || ""));
+    const tipoDoc = String(fila[5] || "").toLowerCase();
+
+    return (
+      fechaFila === fechaHoy &&
+      cedulaFila === cedulaBuscada &&
+      tipoDoc.includes("certificado de gastos")
+    );
+  }).length;
 }
 
 async function generarPdfCertificadoGastosAutomatico(datos: {
@@ -2064,6 +2131,21 @@ if (!["fisico", "digital"].includes(formaEntregaTexto)) {
     );
   }
 
+  const cantidadSolicitudesHoy = await contarSolicitudesGastosDelDia(
+    datosTitular.identificacion || String(identificacion).trim()
+  );
+  
+  if (cantidadSolicitudesHoy >= LIMITE_SOLICITUDES_GASTOS_DIA) {
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          "Has alcanzado el límite de tres (3) solicitudes de certificado de gastos servicios funerarios por día. Intenta nuevamente mañana.",
+      },
+      { status: 429 }
+    );
+  }
+
     if (!esSolicitudEmpresarial) {
       const contratosMorosos = await obtenerContratosMorosos(contratosExequiales);
     
@@ -2215,20 +2297,23 @@ if (!["fisico", "digital"].includes(formaEntregaTexto)) {
             quienNecesitaDoc: "Titular",
             dirigidoADoc: destinoGastosTexto,
             datosDoc: datosDocAutomatico,
+            formaEntrega: formaEntregaTexto,
           });
   
-          await registrarSolicitudNivel2CertificadoGastos({
-            fechaSolicitud: obtenerFechaRegistroTexto(),
-            lugarRetiro: "AUTOMÁTICO",
-            cedulaTitular:
-              datosTitular.identificacion || String(identificacion).trim(),
-            nombreTitular: datosTitular.nombre,
-            cedulaFallecido: String(cedulaFallecido).trim(),
-            nombreFallecido: nombreFallecidoOrden,
-            fechaFallecimiento: fechaFallecimientoOrden,
-            dirigidoA: destinoGastosTexto,
-            observacion: `${datosTitular.email} / ${codigoAutenticidad} / ${ordenServicio} / AUTOMÁTICO / ${formaEntregaTexto.toUpperCase()}`,
-          });
+          if (formaEntregaTexto === "fisico") {
+            await registrarSolicitudNivel2CertificadoGastos({
+              fechaSolicitud: obtenerFechaRegistroTexto(),
+              lugarRetiro: lugarRetiroTexto.toLocaleUpperCase("es-CO"),
+              cedulaTitular:
+                datosTitular.identificacion || String(identificacion).trim(),
+              nombreTitular: datosTitular.nombre,
+              cedulaFallecido: String(cedulaFallecido).trim(),
+              nombreFallecido: nombreFallecidoOrden,
+              fechaFallecimiento: fechaFallecimientoOrden,
+              dirigidoA: destinoGastosTexto,
+              observacion: `${datosTitular.email} / ${codigoAutenticidad} / ${ordenServicio} / AUTOMÁTICO / ${formaEntregaTexto.toUpperCase()}`,
+            });
+          }
   
           if (formaEntregaTexto === "digital") {
             await enviarCertificadoGastosAutomatico({
@@ -2289,6 +2374,17 @@ if (!["fisico", "digital"].includes(formaEntregaTexto)) {
       );
     }
   }
+
+  if (formaEntregaTexto === "digital") {
+    return NextResponse.json(
+      {
+        ok: false,
+        message:
+          "No fue posible generar el certificado digital porque no se encontró una orden de servicio asociada al documento del fallecido.",
+      },
+      { status: 422 }
+    );
+  }
   
   const codigoSolicitud = generarCodigoSolicitud();
 
@@ -2324,6 +2420,7 @@ if (!["fisico", "digital"].includes(formaEntregaTexto)) {
         quienNecesitaDoc: "Titular",
         dirigidoADoc: destinoGastosTexto,
         datosDoc,
+        formaEntrega: formaEntregaTexto,
       });
 
       await registrarSolicitudNivel2CertificadoGastos({
