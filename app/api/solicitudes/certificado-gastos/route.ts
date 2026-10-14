@@ -239,11 +239,20 @@ function extraerServiciosOrden(datosOrden: OrdenServicioKaring): ServicioOrden[]
     .filter((item) => item && typeof item === "object" && !Array.isArray(item))
     .map((item) => {
       const servicio = item as Record<string, unknown>;
+
       const codigoServicio = obtenerTexto(servicio.servicio);
+
+      // Cantidad de unidades del servicio
       const cantidad = obtenerNumero(servicio.cantidad) || 0;
-      const basico = obtenerNumero(servicio.valor_convenio) || 0;
+
+      // Karing devuelve el valor unitario del convenio
+      const valorUnitario = obtenerNumero(servicio.valor_convenio) || 0;
+
+      // Valor básico total = valor unitario x cantidad
+      const basico = valorUnitario * cantidad;
+
+      // El excedente siempre debe ser cero
       const excedente = 0;
-      const valorUnitario = cantidad > 0 ? basico / cantidad : basico;
 
       return {
         categoria: obtenerCategoriaServicio(codigoServicio),
@@ -255,7 +264,7 @@ function extraerServiciosOrden(datosOrden: OrdenServicioKaring): ServicioOrden[]
       };
     })
     .filter((servicio) => {
-      return servicio.basico > 0 || servicio.excedente > 0 || servicio.cantidad > 0;
+      return servicio.basico > 0 || servicio.cantidad > 0;
     });
 }
 
