@@ -2328,10 +2328,15 @@ if (!["fisico", "digital"].includes(formaEntregaTexto)) {
   
           const serviciosOrden = extraerServiciosOrden(datosOrdenServicio);
   
-          const contratoAutomatico =
-            planesExequiales[0]?.contrato ||
-            obtenerTexto(contratosParaSolicitud[0]?.contrato) ||
-            "No disponible";
+          // Obtener el contrato asociado directamente a la orden de servicio.
+          // Se conserva como texto para respetar los ceros a la izquierda.
+          const contratoAutomatico = obtenerTexto(fallecidoOrden.numero_poliza);
+
+          if (!contratoAutomatico) {
+            throw new Error(
+              `La orden de servicio ${ordenServicio} no contiene un número de póliza válido.`
+            );
+          }
   
           const pdfBytes = await generarPdfCertificadoGastosAutomatico({
             dirigidoA: destinoGastosTexto,
